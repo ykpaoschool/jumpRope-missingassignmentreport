@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.DS_Store
+
+# Local tooling and Claude Code guidance (not versioned)
+.claude/
+.codegraph/
+CLAUDE.md
+
+# Sample data (real student data — never commit)
+data/
