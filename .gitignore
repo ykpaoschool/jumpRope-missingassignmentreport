@@ -7,6 +7,7 @@ __pycache__/
 # Local tooling and Claude Code guidance (not versioned)
 .claude/
 .codegraph/
+plans/
 CLAUDE.md
 
 # Sample data (real student data — never commit)
