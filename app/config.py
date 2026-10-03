@@ -10,7 +10,13 @@ TENANT_ID = os.getenv("TENANT_ID", "").strip()
 CLIENT_ID = os.getenv("CLIENT_ID", "").strip()
 CLIENT_SECRET = os.getenv("CLIENT_SECRET", "").strip()
 SHARED_MAILBOX = os.getenv("SHARED_MAILBOX", "").strip()
-SENDER_DISPLAY_NAME = os.getenv("SENDER_DISPLAY_NAME", "教务部门 Academic Office").strip()
+SENDER_DISPLAY_NAME = os.getenv(
+    "SENDER_DISPLAY_NAME", "包校初中部学术办公室/YK Pao Middle School Academic Affairs Office"
+).strip()
+SENDER_CONTACT_EMAIL = os.getenv("SENDER_CONTACT_EMAIL", "hq-aao@ykpaoschool.cn").strip()
+
+# 邮件正文中「请点击此处查看未按时提交作业处理程序」的跳转地址；留空则该句退化为普通文字
+PROCEDURE_URL = os.getenv("PROCEDURE_URL", "https://shorturl.myykps.cn/ms-pfswt").strip()
 
 # SMTP（快速测试渠道）
 SMTP_HOST = os.getenv("SMTP_HOST", "").strip()

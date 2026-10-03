@@ -35,6 +35,16 @@ def _mailer(channel: str):
     return graph_mailer
 
 
+def _render(s: dict) -> tuple[str, str]:
+    """按 config 中的落款与跳转链接渲染邮件。"""
+    return email_template.render_email(
+        s,
+        sender_display_name=config.SENDER_DISPLAY_NAME,
+        sender_contact_email=config.SENDER_CONTACT_EMAIL,
+        procedure_url=config.PROCEDURE_URL,
+    )
+
+
 @app.get("/api/status")
 def status():
     return {
@@ -91,6 +101,7 @@ def get_students():
     return [
         {
             "student_id": s["student_id"],
+            "student_name": s.get("student_name", ""),
             "grade": s["grade"],
             "class": s["class"],
             "parent_email": s["parent_email"],
@@ -112,9 +123,10 @@ def preview(student_id: str):
     s = _find(student_id)
     if s is None:
         raise HTTPException(status_code=404, detail="学生不存在")
-    subject, html = email_template.render_email(s, config.SENDER_DISPLAY_NAME)
+    subject, html = _render(s)
     return {
         "student_id": student_id,
+        "student_name": s.get("student_name", ""),
         "subject": subject,
         "html": html,
         "parent_email": s["parent_email"],
@@ -150,7 +162,7 @@ def send(req: SendRequest):
     results = []
     mailer = _mailer(req.channel)
     for addr, s in targets:
-        subject, html = email_template.render_email(s, config.SENDER_DISPLAY_NAME)
+        subject, html = _render(s)
         if req.mode == "test":
             subject = f"[测试 TEST] {subject}"
         try:

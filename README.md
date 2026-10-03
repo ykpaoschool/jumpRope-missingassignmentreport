@@ -6,7 +6,8 @@ Office 365 共享邮箱（应用凭据，非交互式）批量发送给家长。
 ## 功能
 
 - 上传 `.xlsx` → 按「Student External Id」分组，每个学生一封邮件。
-- 邮件正文**中英双语**，以表格列出：课程名称 / 老师 / 评估标题 / 截止日期 / 缺交代码。
+- 邮件正文**中英双语**，以表格列出：课程名称 / 老师 / 评估标题 / 截止日期 / 缺交代码，
+  并附缺交代码释义（M: 缺交作业、X: 未完成作业）与「未按时提交作业处理程序」链接。
 - 待发送列表 + 单封邮件预览 + 测试/正式两种发送模式 + 发送结果明细。
 - 两种发送渠道：Office 365 (Graph) 与 SMTP（测试用），界面上可切换。
 - 家长邮箱缺失的学生会被标红并跳过发送。
@@ -16,6 +17,13 @@ Office 365 共享邮箱（应用凭据，非交互式）批量发送给家长。
 示例见 `data/Missing_Work_Report.xlsx`。第 1 行为表头，A–M 列与示例一致；
 **第 14 列（N）为家长邮箱**（示例文件中暂无，实际文件需包含）。若表头中含有
 「邮箱 / email / mail / 家长」等关键词，也会自动识别为邮箱列。
+
+学生姓名会按以下顺序自动匹配表头，用于邮件正文的「学生姓名 Student Name」：
+
+1. `Student Name`（或 `Student Full Name`、`Student Last First`、`Student Last Name First`）
+2. `Student First Name` + `Student Last Name` 两列拼接
+
+两者都不存在时会给出提示，邮件中不显示姓名行。
 
 ## 环境准备
 
@@ -40,7 +48,9 @@ cp .env.example .env   # 然后填写下面的凭据
 | `SMTP_PASSWORD` | SMTP 密码（可留空） |
 | `SMTP_FROM` | SMTP 发件人地址 |
 | `SMTP_STARTTLS` | 是否启用 STARTTLS，默认 true；465 端口自动走 SSL |
-| `SENDER_DISPLAY_NAME` | 落款显示名（可选） |
+| `SENDER_DISPLAY_NAME` | 邮件落款机构名，默认「包校初中部学术办公室/YK Pao Middle School Academic Affairs Office」 |
+| `SENDER_CONTACT_EMAIL` | 邮件落款联系邮箱，默认 `hq-aao@ykpaoschool.cn` |
+| `PROCEDURE_URL` | 「查看未按时提交作业处理程序」的跳转地址，留空则该句显示为普通文字 |
 | `SEND_DELAY_SECONDS` | 每封发送间隔（秒，默认 0.5） |
 
 ## SMTP 快速测试（无需 Azure）
