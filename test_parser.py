@@ -55,3 +55,36 @@ assert r3["students"][0]["parent_email"] == ""
 assert any("缺少家长邮箱" in w for w in r3["warnings"])
 
 print("OK: parent email column detection (N / header keyword / empty) all pass")
+
+
+# 场景 4：学生姓名列（整名列 / First+Last 拼接 / 完全缺失）
+BASE = ["Student External Id", "Student Current Grade Level", "Student Official Class",
+        "Advisor Last First", "School Short Code", "Section Course Name",
+        "Section External Id", "Section Teacher Name", "Assessment Type Name",
+        "Assessment Title", "Assessment Due Date", "Missing Work Code",
+        "Missing Work Comment", "Parent Email"]
+
+
+def build_with(extra_headers, extra_values):
+    wb = Workbook(); ws = wb.active
+    ws.append(BASE + extra_headers)
+    ws.append(["24311", "08", "2031", None, "YK Pao", "8 MATH 数学", "8H", "Sue Li",
+               "Formative", "1.1.1 HW", 46273, "M", None, "parent@example.com"] + extra_values)
+    buf = BytesIO(); wb.save(buf)
+    return buf.getvalue()
+
+
+# 4a：First + Last 分列 → 拼接
+r4a = parse_workbook(build_with(["Student First Name", "Student Last Name"], ["San", "Zhang"]))
+assert r4a["students"][0]["student_name"] == "San Zhang", r4a["students"][0]
+
+# 4b：单一 Student Name 列
+r4b = parse_workbook(build_with(["Student Name"], ["Zhang San"]))
+assert r4b["students"][0]["student_name"] == "Zhang San", r4b["students"][0]
+
+# 4c：完全没有姓名列 → 空字符串 + 警告
+r4c = parse_workbook(build_with([], []))
+assert r4c["students"][0]["student_name"] == ""
+assert any("学生姓名" in w for w in r4c["warnings"]), r4c["warnings"]
+
+print("OK: student name columns (full / first+last / missing) all pass")

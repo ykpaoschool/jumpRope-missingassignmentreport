@@ -115,7 +115,7 @@ function renderTable() {
   const tbody = $("student-tbody");
   tbody.innerHTML = "";
   if (!students.length) {
-    tbody.appendChild(el("tr", {}, [el("td", { colspan: "7", class: "empty", text: "尚未上传文件" })]));
+    tbody.appendChild(el("tr", {}, [el("td", { colspan: "8", class: "empty", text: "尚未上传文件" })]));
     return;
   }
   for (const s of students) {
@@ -127,6 +127,7 @@ function renderTable() {
     const tr = el("tr", s.parent_email ? {} : { class: "no-email" }, [
       el("td", {}, [cb]),
       el("td", { text: s.student_id }),
+      el("td", { text: s.student_name || "—" }),
       el("td", { text: s.grade }),
       el("td", { text: s["class"] }),
       el("td", { text: s.parent_email || "（缺邮箱）" }),
@@ -151,7 +152,7 @@ function syncCheckAll() {
 // ---- 预览 ----
 async function preview(id) {
   const r = await api(`/api/preview/${encodeURIComponent(id)}`);
-  $("preview-title").textContent = `预览 · 学生 ${r.student_id}`;
+  $("preview-title").textContent = `预览 · 学生 ${r.student_id}${r.student_name ? ` ${r.student_name}` : ""}`;
   $("preview-subject").textContent = `主题：${r.subject}　|　收件人：${r.parent_email}`;
   const frame = $("preview-frame");
   frame.srcdoc = r.html;

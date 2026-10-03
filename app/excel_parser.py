@@ -24,6 +24,11 @@ COL_HEADERS = {
 # 用于定位家长邮箱列的表头关键词
 EMAIL_KEYWORDS = ("email", "mail", "邮箱", "家长")
 
+# 学生姓名列的表头候选（按优先级）；整名列缺失时回退到 First + Last 拼接
+NAME_HEADERS = ("Student Name", "Student Full Name", "Student Last First", "Student Last Name First")
+FIRST_NAME_HEADERS = ("Student First Name", "Student Firstname", "Student Preferred First Name")
+LAST_NAME_HEADERS = ("Student Last Name", "Student Lastname", "Student Preferred Last Name")
+
 # 必需列缺失时视为无法解析
 REQUIRED_HEADERS = ("student_id", "course", "teacher", "title", "due_date", "code")
 
@@ -85,6 +90,26 @@ def parse_workbook(data: bytes, filename: str = "") -> dict:
     if email_col is None and len(header) >= 14:
         email_col = 13
 
+    def find_col(candidates: tuple[str, ...]) -> int | None:
+        for name in candidates:
+            if name in header:
+                return header.index(name)
+        return None
+
+    name_col = find_col(NAME_HEADERS)
+    first_col = find_col(FIRST_NAME_HEADERS)
+    last_col = find_col(LAST_NAME_HEADERS)
+
+    def row_name(row) -> str:
+        if name_col is not None:
+            return _clean(row[name_col]) if name_col < len(row) else ""
+        parts = [
+            _clean(row[i]) if i < len(row) else ""
+            for i in (first_col, last_col)
+            if i is not None
+        ]
+        return " ".join(p for p in parts if p)
+
     missing = [name for key, name in COL_HEADERS.items() if idx[key] is None and key in REQUIRED_HEADERS]
     if missing:
         return {"students": [], "warnings": [f"缺少必需列：{'、'.join(missing)}"]}
@@ -108,6 +133,7 @@ def parse_workbook(data: bytes, filename: str = "") -> dict:
         if sid not in grouped:
             grouped[sid] = {
                 "student_id": sid,
+                "student_name": row_name(row),
                 "grade": _clean(get(row, "grade")),
                 "class": _clean(get(row, "class")),
                 "school": _clean(get(row, "school")),
@@ -133,6 +159,8 @@ def parse_workbook(data: bytes, filename: str = "") -> dict:
         )
 
     students = [grouped[sid] for sid in order]
+    if students and name_col is None and first_col is None and last_col is None:
+        warnings.append("未找到学生姓名列（Student Name 或 Student First/Last Name），邮件中不显示学生姓名")
     no_email = [s["student_id"] for s in students if not s["parent_email"]]
     if no_email:
         warnings.append(f"以下 {len(no_email)} 名学生缺少家长邮箱，将不会被发送：{', '.join(no_email)}")
