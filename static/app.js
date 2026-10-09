@@ -23,11 +23,15 @@ function esc(s) {
 
 async function api(path, options = {}) {
   const resp = await fetch(path, options);
-  const data = await resp.json().catch(() => ({}));
+  const data = await resp.json().catch(() => null);
   if (!resp.ok) {
-    const err = new Error(data.detail || data.error || `请求失败 (${resp.status})`);
+    const err = new Error((data && (data.detail || data.error)) || `请求失败 (${resp.status})`);
     err.status = resp.status;
     throw err;
+  }
+  if (data === null) {
+    // 反代错误页之类的非 JSON 响应：报清楚，别让调用方读出不存在的字段
+    throw new Error(`服务返回了非 JSON 响应 (${resp.status})，请强制刷新页面后重试`);
   }
   return data;
 }
@@ -199,11 +203,21 @@ async function send() {
   $("send-result").classList.add("hidden");
   try {
     // 202：任务已在后台启动，真正的进度靠轮询拿
-    await api("/api/send", {
+    const r = await api("/api/send", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+    if (!r.job_id) {
+      // 接口返回了 2xx 却没有任务信息：多半是前端已更新、后端还是旧版本
+      const box = $("send-result");
+      box.classList.remove("hidden");
+      box.innerHTML =
+        '<div class="fail">服务端未返回发送任务信息。可能是服务端仍是旧版本，' +
+        "请重启服务后强制刷新页面（Cmd/Ctrl+Shift+R）再试。</div>";
+      setSendButton(false);
+      return;
+    }
     startPolling();
   } catch (e) {
     setSendButton(false);
@@ -276,6 +290,8 @@ async function pollStatus() {
 
 function renderJob(job) {
   if (!job) return;
+  // 结果列表可能来自旧版本或被截断，永远按数组处理，避免整页脚本被打断
+  const results = Array.isArray(job.results) ? job.results : [];
   const done = job.sent + job.failed;
   const pct = job.total ? Math.round((done / job.total) * 100) : 0;
 
@@ -308,7 +324,7 @@ function renderJob(job) {
   }
   box.innerHTML =
     head +
-    job.results
+    results
       .map(
         (x) =>
           `<div>${x.ok ? '<span class="ok">✓</span>' : '<span class="fail">✗</span>'} 学生 ${esc(x.student_id)} → ${esc(x.to)}${x.ok ? "" : `　<span class="fail">${esc(x.error)}</span>`}</div>`
