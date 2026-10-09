@@ -106,6 +106,20 @@ body {
 .grid tr.no-email td { color: var(--red); }
 .grid .empty { text-align: center; color: var(--muted); padding: 20px; }
 
+/* 发送日志：job_start / job_end 这类整批事件跨列成灰底小字，与逐封记录区分 */
+.grid tr.log-event td { background: #f6f7f9; color: var(--muted); font-size: 12px; }
+.grid td.log-ok { color: #2e7d32; }
+.grid td.log-fail { color: var(--red); }
+/* 短列不折行，宽度让给「主题 / 错误原因」；表格本身可横向滚动 */
+#log-tbody td.log-nowrap { white-space: nowrap; }
+#log-date, #log-ok {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+}
+#log-hint { margin-left: auto; text-align: right; }
+
 .mode-group { display: flex; gap: 18px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
 .group-label { color: var(--muted); font-size: 13px; }
 .radio, .check { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }

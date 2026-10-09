@@ -349,8 +349,11 @@ async function pollStatus() {
     pollFailures = 0;
     renderJob(data.job);
     if (!data.job || data.job.status !== "running") {
+      const hadRun = jobRunning; // stopPolling() 会把它清掉，先留个记号
       stopPolling();
       setSendButton(false);
+      // 刚刚跑完一批：第 4 节自动跟着刷新，省得用户还以为要手点一下
+      if (hadRun) loadLogs();
     }
   } catch (e) {
     // 偶发失败（例如网络抖动）继续轮询；连续失败说明服务不可用，停下来别刷屏
@@ -441,6 +444,108 @@ function renderJob(job) {
   box.appendChild(detail);
 }
 
+// ---- 发送日志（SQLite，跨重启保留）----
+const LOG_LIMIT = 200;
+
+// 日志行只需要时分秒：日期由上面的下拉框决定了
+function logTime(ts) {
+  return String(ts || "").slice(11) || String(ts || "");
+}
+
+function logModeChannel(e) {
+  return `${e.mode === "live" ? "正式" : "测试"} · ${e.channel === "smtp" ? "SMTP" : "Graph"}`;
+}
+
+// job_start / job_end 是整批级别的事件，跨列成一行灰底小字，与逐封记录区分
+function logEventRow(e) {
+  const parts = [];
+  if (e.event === "job_start") {
+    parts.push(`任务开始 · 共 ${e.total == null ? "?" : e.total} 封 · ${logModeChannel(e)}`);
+    if (e.filename) parts.push(`文件 ${e.filename}`);
+    if (e.email_column_header) parts.push(`收件列 ${e.email_column_header}`);
+    else if (e.email_column != null) parts.push(`收件列第 ${Number(e.email_column) + 1} 列`);
+  } else if (e.status === "failed") {
+    // 整批在连接阶段就失败：一封都没发出去，这条行就是它在日志里的唯一痕迹
+    parts.push(`任务未开始（整批发送失败）· ${logModeChannel(e)}`, e.error || "未知错误");
+  } else {
+    parts.push(`任务结束 · ${logModeChannel(e)} · 成功 ${e.sent || 0} 封 / 失败 ${e.failed || 0} 封`);
+    if (e.duration_ms != null) parts.push(`用时 ${(e.duration_ms / 1000).toFixed(1)} 秒`);
+  }
+  return el("tr", { class: "log-event" }, [
+    el("td", { colspan: "7", text: `${logTime(e.ts)}　${parts.join("　|　")}` }),
+  ]);
+}
+
+function logSendRow(e) {
+  const ok = Number(e.ok) === 1;
+  const who = e.student_name ? `${e.student_name}（${e.student_id}）` : e.student_id || "—";
+  const klass = [e.grade, e.class_name].filter(Boolean).join(" / ") || "—";
+  return el("tr", {}, [
+    el("td", { class: "log-nowrap", text: logTime(e.ts) }),
+    el("td", { class: ok ? "log-ok log-nowrap" : "log-fail log-nowrap", text: ok ? "✓ 成功" : "✗ 失败" }),
+    el("td", { text: who }),
+    el("td", { class: "log-nowrap", text: klass }),
+    el("td", { text: e.recipient || "" }),
+    el("td", { class: "log-nowrap", text: logModeChannel(e) }),
+    // 成功看主题、失败看原因：同一列里放「这封是什么/为什么没发出去」
+    el("td", { class: ok ? "" : "log-fail", text: ok ? e.subject || "" : e.error || "未知错误" }),
+  ]);
+}
+
+function renderLogs(data) {
+  const dbInfo = data.db || {};
+  const errBox = $("log-error");
+  errBox.innerHTML = "";
+  if (!dbInfo.ready) {
+    // 日志写不进去不影响发信，但必须说出来——否则会以为记录只是「还没刷新出来」
+    errBox.appendChild(
+      el("li", {
+        text:
+          `发送日志不可用：${dbInfo.error || "未知原因"}（库文件：${dbInfo.path || "未知"}）。` +
+          "写入失败不会影响发信，但这些记录不会留存。",
+      })
+    );
+  }
+
+  const current = data.date || "";
+  const options = Array.isArray(data.dates) ? data.dates.slice() : [];
+  if (current && options.indexOf(current) === -1) options.unshift(current); // 指定的日期即使当天无记录也要能显示
+  const sel = $("log-date");
+  sel.innerHTML = "";
+  for (const d of options) sel.appendChild(el("option", { value: d, text: d }));
+  if (current) sel.value = current;
+  sel.classList.toggle("hidden", options.length === 0);
+
+  const c = data.counts || {};
+  let hint = `当日：投递 ${c.send || 0} 封（成功 ${c.ok || 0}，失败 ${c.failed || 0}）· 整批 ${c.jobs || 0} 次`;
+  if (data.truncated) hint += `　|　仅显示最近 ${data.entries.length} 条`;
+  $("log-hint").textContent = hint;
+
+  const tbody = $("log-tbody");
+  tbody.innerHTML = "";
+  const entries = Array.isArray(data.entries) ? data.entries : [];
+  if (!entries.length) {
+    tbody.appendChild(el("tr", {}, [el("td", { colspan: "7", class: "empty", text: "当日无发送记录" })]));
+    return;
+  }
+  for (const e of entries) tbody.appendChild(e.event === "send" ? logSendRow(e) : logEventRow(e));
+}
+
+async function loadLogs() {
+  // 日期留空 = 让服务端给最近有记录的一天（初次打开页面时用）
+  const params = new URLSearchParams({ ok: $("log-ok").value, limit: String(LOG_LIMIT) });
+  if ($("log-date").value) params.set("date", $("log-date").value);
+  try {
+    renderLogs(await api(`/api/logs?${params.toString()}`));
+  } catch (e) {
+    const tbody = $("log-tbody");
+    tbody.innerHTML = "";
+    tbody.appendChild(
+      el("tr", {}, [el("td", { colspan: "7", class: "empty", text: `发送日志读取失败：${e.message}` })])
+    );
+  }
+}
+
 // 页面打开时先查一次：任务还在跑就接着轮询，已结束就作为「上次发送」展示
 async function restoreSendState() {
   try {
@@ -486,6 +591,9 @@ $("check-all").addEventListener("change", (e) => {
   document.querySelectorAll(".row-check:not(:disabled)").forEach((c) => (c.checked = e.target.checked));
 });
 $("email-column-select").addEventListener("change", changeEmailColumn);
+$("log-date").addEventListener("change", loadLogs);
+$("log-ok").addEventListener("change", loadLogs);
+$("btn-log-refresh").addEventListener("click", loadLogs);
 $("student-tbody").addEventListener("change", (e) => {
   if (e.target.classList.contains("row-check")) syncCheckAll();
 });
@@ -495,3 +603,4 @@ refreshStatus();
 syncTestEmailRow();
 restoreSendState();
 restoreParsed();
+loadLogs();
