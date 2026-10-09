@@ -88,3 +88,108 @@ assert r4c["students"][0]["student_name"] == ""
 assert any("学生姓名" in w for w in r4c["warnings"]), r4c["warnings"]
 
 print("OK: student name columns (full / first+last / missing) all pass")
+
+
+# 场景 5：多列邮箱 —— 候选列、默认选中、显式指定、非法下标
+
+# A–M 列（不含邮箱列），邮箱列都放在后面，便于控制列下标
+BASE_13 = ["Student External Id", "Student Current Grade Level", "Student Official Class",
+           "Advisor Last First", "School Short Code", "Section Course Name",
+           "Section External Id", "Section Teacher Name", "Assessment Type Name",
+           "Assessment Title", "Assessment Due Date", "Missing Work Code",
+           "Missing Work Comment"]
+
+STUDENTS = 6
+
+
+def build_multi(headers, extras):
+    """extras[i] 为第 i 名学生的附加列取值；每名学生一行。"""
+    wb = Workbook(); ws = wb.active
+    ws.append(BASE_13 + headers)
+    for i in range(STUDENTS):
+        ws.append([f"1000{i}", "08", "2031", None, "YK Pao", "8 MATH 数学", "8H", "Sue Li",
+                   "Formative", "1.1.1 HW", 46273, "M", None] + extras[i])
+    buf = BytesIO(); wb.save(buf)
+    return buf.getvalue()
+
+
+# 5a：两列都像邮箱（N = Advisor Email 只有 1 条，O = Parent Email 有 6 条）
+two_mail_cols = build_multi(
+    ["Advisor Email", "Parent Email"],
+    [["advisor@example.com" if i == 0 else None, f"parent{i}@example.com"] for i in range(STUDENTS)],
+)
+r5a = parse_workbook(two_mail_cols)
+assert [(c["index"], c["letter"], c["header"], c["email_count"]) for c in r5a["email_columns"]] == [
+    (13, "N", "Advisor Email", 1),
+    (14, "O", "Parent Email", 6),
+], r5a["email_columns"]
+# 默认沿用既有规则：第一个表头命中关键词的列（即第一个候选列）
+assert r5a["email_column"] == 13, r5a["email_column"]
+assert r5a["email_column_info"]["header"] == "Advisor Email"
+assert [s["parent_email"] for s in r5a["students"]] == ["advisor@example.com"] + [""] * (STUDENTS - 1)
+# 选错列（1 条 vs 6 条）必须给出提醒
+assert any("请确认收件列" in w for w in r5a["warnings"]), r5a["warnings"]
+
+# 5b：显式指定到 Parent Email 列 → 全部学生都有邮箱，且不再提示选错
+r5b = parse_workbook(two_mail_cols, email_column=14)
+assert r5b["email_column"] == 14
+assert all(s["parent_email"] == f"parent{i}@example.com" for i, s in enumerate(r5b["students"]))
+assert not any("请确认收件列" in w for w in r5b["warnings"]), r5b["warnings"]
+
+# 5c：表头不规范（不含关键词），但数据里是邮箱 → 仍应成为候选列
+no_keyword = build_multi(
+    ["备注", "联系人1"],
+    [[None, f"parent{i}@example.com"] for i in range(STUDENTS)],
+)
+r5c = parse_workbook(no_keyword)
+assert [(c["index"], c["by_header"], c["email_count"]) for c in r5c["email_columns"]] == [(14, False, 6)], r5c["email_columns"]
+# 没有任何关键词时仍回退第 14 列（N），此时它并不在候选里，界面需要照样能显示/切回
+assert r5c["email_column"] == 13
+assert r5c["email_column_info"]["letter"] == "N" and r5c["email_column_info"]["email_count"] == 0
+assert all(s["parent_email"] == "" for s in r5c["students"])
+assert any("缺少家长邮箱" in w for w in r5c["warnings"])
+assert any("请确认收件列" in w for w in r5c["warnings"]), r5c["warnings"]
+r5d = parse_workbook(no_keyword, email_column=14)
+assert all(s["parent_email"] == f"parent{i}@example.com" for i, s in enumerate(r5d["students"]))
+
+# 5e：非法下标 → ValueError
+for bad in (-1, 99):
+    try:
+        parse_workbook(two_mail_cols, email_column=bad)
+        assert False, f"列下标 {bad} 应当抛 ValueError"
+    except ValueError as e:
+        assert "收件邮箱列" in str(e), e
+
+# 5f：提前返回的路径也要带齐列信息，否则 main.py 的 _store.update() 会残留上一次的列
+KEYS = {"students", "warnings", "email_columns", "email_column", "email_column_info"}
+
+empty_wb = Workbook(); buf = BytesIO(); empty_wb.save(buf)
+r_empty = parse_workbook(buf.getvalue())
+assert set(r_empty) == KEYS and r_empty["warnings"] == ["文件为空，无数据"], r_empty
+
+bad_wb = Workbook(); ws = bad_wb.active
+ws.append(["Student External Id", "Parent Email"])
+ws.append(["24311", "parent@example.com"])
+buf = BytesIO(); bad_wb.save(buf)
+r_bad = parse_workbook(buf.getvalue())
+assert set(r_bad) == KEYS and r_bad["email_column"] is None, r_bad
+assert any("缺少必需列" in w for w in r_bad["warnings"]), r_bad["warnings"]
+
+# 5g：单列文件的既有行为不变，只是多出一份可展示的列信息
+assert [(c["index"], c["header"]) for c in r1["email_columns"]] == [(13, "家长邮箱")], r1["email_columns"]
+assert r1["email_column"] == 13 and r1["email_column_info"]["email_count"] == 2
+
+# 5h：列数不足 14 且表头无关键词 —— 老规则会得出「没有邮箱列」，此时退到数据里真有邮箱的候选
+short_wb = Workbook(); ws = short_wb.active
+ws.append(["Student External Id", "Section Course Name", "Section Teacher Name",
+           "Assessment Title", "Assessment Due Date", "Missing Work Code", "联系人"])
+for i in range(3):
+    ws.append([f"2000{i}", "8 MATH 数学", "Sue Li", "1.1.1 HW", 46273, "M", "parent@example.com"])
+buf = BytesIO(); short_wb.save(buf)
+r5h = parse_workbook(buf.getvalue())
+assert [(c["index"], c["by_header"]) for c in r5h["email_columns"]] == [(6, False)], r5h["email_columns"]
+assert r5h["email_column"] == 6 and r5h["email_column_info"]["letter"] == "G", r5h
+assert all(s["parent_email"] == "parent@example.com" for s in r5h["students"])
+assert not any("缺少家长邮箱" in w for w in r5h["warnings"]), r5h["warnings"]
+
+print("OK: multiple email columns (candidates / default / override / invalid) all pass")

@@ -53,6 +53,21 @@ body {
 
 .upload-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 
+.email-column {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.email-column select {
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+  max-width: 100%;
+}
+
 .btn {
   border: 1px solid transparent;
   border-radius: 6px;
@@ -86,6 +101,8 @@ body {
   font-size: 13px;
 }
 .grid thead th { background: #f2f4f7; }
+/* 表头下方的小字：标出这一列实际取自 Excel 的哪个字段 */
+.grid thead th .th-sub { display: block; margin-top: 2px; font-weight: normal; font-size: 11px; color: var(--muted); }
 .grid tr.no-email td { color: var(--red); }
 .grid .empty { text-align: center; color: var(--muted); padding: 20px; }
 

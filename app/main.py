@@ -35,8 +35,18 @@ async def no_cache_assets(request, call_next):
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# 内存缓存：仅适合单机单人内部工具
-_store: dict = {"students": [], "warnings": []}
+# 内存缓存：仅适合单机单人内部工具。
+# raw/filename 是给「切换收件邮箱列」用的：切换时不重新上传文件（页面刷新后前端已无
+# File 对象），而是用这份原始字节按新列号重跑解析。
+_store: dict = {
+    "students": [],
+    "warnings": [],
+    "email_columns": [],
+    "email_column": None,
+    "email_column_info": None,
+    "raw": None,
+    "filename": "",
+}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -97,6 +107,38 @@ async def upload(file: UploadFile = File(...)):
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"Excel 解析失败：{e}")
     _store.update(result)
+    _store["raw"] = raw
+    _store["filename"] = file.filename or ""
+    return _summary()
+
+
+class EmailColumnRequest(BaseModel):
+    column: int
+
+
+@app.post("/api/email-column")
+def set_email_column(req: EmailColumnRequest):
+    """切换收件邮箱列：用留存的原始字节重新解析，不要求前端重新上传文件。
+
+    重跑解析（而不是只换一列取值）是为了让摘要里的有邮箱/缺邮箱统计与警告一起刷新，
+    避免列表和统计各说各话。
+    """
+    raw = _store.get("raw")
+    if raw is None:
+        raise HTTPException(status_code=400, detail="尚未上传 Excel 文件")
+    try:
+        result = excel_parser.parse_workbook(raw, _store.get("filename", ""), email_column=req.column)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Excel 解析失败：{e}")
+    _store.update(result)
+    return _summary()
+
+
+@app.get("/api/summary")
+def get_summary():
+    """与上传返回同一个结构：页面重开后靠它恢复第 1 节（解析摘要 + 收件列控件）。"""
     return _summary()
 
 
@@ -104,11 +146,15 @@ def _summary() -> dict:
     students = _store["students"]
     no_email = [s["student_id"] for s in students if not s["parent_email"]]
     return {
+        "uploaded": _store.get("raw") is not None,
         "total_students": len(students),
         "with_email": sum(1 for s in students if s["parent_email"]),
         "no_email": no_email,
         "total_items": sum(len(s["items"]) for s in students),
         "warnings": _store.get("warnings", []),
+        "email_columns": _store.get("email_columns", []),
+        "email_column": _store.get("email_column"),
+        "email_column_info": _store.get("email_column_info"),
     }
 
 

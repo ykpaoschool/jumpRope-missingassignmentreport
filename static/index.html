@@ -23,6 +23,11 @@
         <input type="file" id="file-input" accept=".xlsx,.xls" />
         <button id="btn-upload" class="btn btn-primary">上传并解析</button>
       </div>
+      <div id="email-column-row" class="email-column hidden">
+        <label class="group-label" for="email-column-select">收件邮箱列</label>
+        <span id="email-column-static" class="hint"></span>
+        <select id="email-column-select" class="hidden"></select>
+      </div>
       <div id="summary" class="summary hidden"></div>
       <ul id="warnings" class="warnings"></ul>
     </section>
@@ -43,7 +48,7 @@
               <th>姓名</th>
               <th>年级</th>
               <th>班级</th>
-              <th>家长邮箱</th>
+              <th>收件人<span id="th-email-sub" class="th-sub"></span></th>
               <th>缺交条数</th>
               <th>操作</th>
             </tr>

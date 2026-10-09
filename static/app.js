@@ -111,6 +111,81 @@ function renderSummary(s) {
   const w = $("warnings");
   w.innerHTML = "";
   for (const msg of s.warnings || []) w.appendChild(el("li", { text: msg }));
+  renderEmailColumn(s);
+}
+
+// ---- 收件邮箱列 ----
+function columnLabel(c) {
+  const name = c.header ? ` · ${c.header}` : "";
+  const count = c.email_count ? `${c.email_count} 条邮箱` : "无有效邮箱";
+  return `${c.letter} 列${name}（${count}）`;
+}
+
+// 所选列可能不在候选里（例如表头没有邮箱关键词时回退到 N 列），必须把它补进选项，
+// 否则下拉框上显示的和实际使用的不是同一列。
+function emailColumnOptions(data) {
+  const list = Array.isArray(data.email_columns) ? data.email_columns.slice() : [];
+  const info = data.email_column_info;
+  if (info && !list.some((c) => c.index === info.index)) list.push(info);
+  return list.sort((a, b) => a.index - b.index);
+}
+
+// 表头「收件人」下方标注实际取自 Excel 的哪个字段，随收件列一起更新
+let currentEmailColumn = null;
+
+function renderEmailColumnHeader() {
+  const info = currentEmailColumn;
+  $("th-email-sub").textContent = !info ? "" : info.header || `${info.letter} 列（无表头）`;
+}
+
+function renderEmailColumn(data) {
+  currentEmailColumn = data.uploaded ? data.email_column_info || null : null;
+  renderEmailColumnHeader();
+
+  const row = $("email-column-row");
+  if (!data.uploaded) {
+    row.classList.add("hidden");
+    return;
+  }
+  row.classList.remove("hidden");
+
+  const select = $("email-column-select");
+  const staticEl = $("email-column-static");
+  const options = emailColumnOptions(data);
+
+  if (options.length <= 1) {
+    // 只有一列可选时不放控件，但仍要说明用的是哪一列——这一步以前是看不见的黑盒
+    staticEl.textContent = options.length
+      ? columnLabel(options[0])
+      : "未识别到邮箱列，无法发送（详见下方提示）";
+    staticEl.classList.remove("hidden");
+    select.classList.add("hidden");
+    return;
+  }
+
+  select.innerHTML = "";
+  for (const c of options) select.appendChild(el("option", { value: String(c.index), text: columnLabel(c) }));
+  select.value = String(data.email_column);
+  select.disabled = jobRunning;
+  staticEl.classList.add("hidden");
+  select.classList.remove("hidden");
+}
+
+async function changeEmailColumn() {
+  const select = $("email-column-select");
+  select.disabled = true;
+  try {
+    const summary = await api("/api/email-column", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ column: Number(select.value) }),
+    });
+    renderSummary(summary); // 摘要、警告、控件本身按新列一起刷新
+    await loadStudents();
+  } catch (e) {
+    alert(e.message);
+    select.disabled = jobRunning;
+  }
 }
 
 // ---- 学生列表 ----
@@ -246,6 +321,8 @@ function setSendButton(busy) {
   const btn = $("btn-send");
   btn.disabled = busy;
   btn.textContent = busy ? "发送中…" : "发送";
+  // 发送中的任务已经对收件人做了快照，禁用选择器是为了不让待发送列表与正在发送的内容两说
+  $("email-column-select").disabled = busy;
 }
 
 function startPolling() {
@@ -378,6 +455,18 @@ async function restoreSendState() {
   }
 }
 
+// 解析结果同样存在服务端内存里，刷新页面不该要求重新上传一遍文件
+async function restoreParsed() {
+  try {
+    const s = await api("/api/summary");
+    if (!s.uploaded) return;
+    renderSummary(s);
+    await loadStudents();
+  } catch (e) {
+    // 恢复失败不影响其他功能，静默忽略
+  }
+}
+
 window.addEventListener("beforeunload", (e) => {
   if (!jobRunning) return;
   e.preventDefault();
@@ -396,6 +485,7 @@ $("preview-modal").addEventListener("click", (e) => {
 $("check-all").addEventListener("change", (e) => {
   document.querySelectorAll(".row-check:not(:disabled)").forEach((c) => (c.checked = e.target.checked));
 });
+$("email-column-select").addEventListener("change", changeEmailColumn);
 $("student-tbody").addEventListener("change", (e) => {
   if (e.target.classList.contains("row-check")) syncCheckAll();
 });
@@ -404,3 +494,4 @@ document.querySelectorAll('input[name="mode"]').forEach((r) => r.addEventListene
 refreshStatus();
 syncTestEmailRow();
 restoreSendState();
+restoreParsed();
