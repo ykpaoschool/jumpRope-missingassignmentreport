@@ -10,7 +10,15 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, email_template, excel_parser, graph_mailer, send_job, smtp_mailer
+from . import (
+    config,
+    email_template,
+    excel_parser,
+    graph_mailer,
+    send_job,
+    send_log,
+    smtp_mailer,
+)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
@@ -239,11 +247,23 @@ def send(req: SendRequest):
                 "to": addr,
                 "subject": subject,
                 "html": html,
+                # 以下三项只为写发送日志：年级/班级/缺交条数只有此刻能拿到，发完就没了
+                "grade": s.get("grade", ""),
+                "class": s.get("class", ""),
+                "item_count": len(s.get("items", [])),
             }
         )
 
+    column_info = _store.get("email_column_info") or {}
+    meta = {
+        "filename": _store.get("filename", ""),
+        "email_column": _store.get("email_column"),
+        "email_column_header": column_info.get("header", ""),
+    }
     try:
-        job = send_job.start(prepared, _mailer(req.channel), mode=req.mode, channel=req.channel)
+        job = send_job.start(
+            prepared, _mailer(req.channel), mode=req.mode, channel=req.channel, meta=meta
+        )
     except send_job.JobBusyError as e:
         raise HTTPException(status_code=409, detail=str(e))
     return {"job_id": job["id"], "total": job["total"]}
@@ -253,3 +273,12 @@ def send(req: SendRequest):
 def send_status():
     """当前/最近一次发送任务；前端每秒轮询，页面重开后靠它恢复进度。"""
     return {"job": send_job.snapshot()}
+
+
+@app.get("/api/logs")
+def logs(date: Optional[str] = None, ok: str = "all", limit: int = 200):
+    """第 4 节「发送日志」：按日期与结果读 SQLite 里的投递记录。
+
+    与内存里的任务状态互补：任务状态重启即失，日志留得住。
+    """
+    return send_log.read(day=date, ok=ok, limit=limit)

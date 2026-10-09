@@ -4,7 +4,9 @@
 """
 
 import json
+import os
 import socket
+import tempfile
 import threading
 import time
 from email import policy
@@ -15,6 +17,9 @@ from app import config, graph_mailer, send_job, smtp_mailer
 
 # 加速：任务之间不再 sleep
 config.SEND_DELAY_SECONDS = 0
+
+# 发送日志会写库：指向临时文件，别把测试数据灌进真实的 data/mailer.db
+config.DB_PATH = os.path.join(tempfile.mkdtemp(prefix="send-job-test-"), "mailer.db")
 
 
 class FakeMailer:
