@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
 from typing import Optional
 
@@ -11,7 +10,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, email_template, excel_parser, graph_mailer, smtp_mailer
+from . import config, email_template, excel_parser, graph_mailer, send_job, smtp_mailer
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
@@ -140,8 +139,14 @@ class SendRequest(BaseModel):
     test_email: Optional[str] = None
 
 
-@app.post("/api/send")
+@app.post("/api/send", status_code=202)
 def send(req: SendRequest):
+    """校验 + 渲染 + 抢任务锁，立刻返回；实际发信在后台线程里跑。
+
+    这里只做同步的准备工作（模板异常要当场暴露），不在这里发信——整批发完再返回
+    会顶穿反向代理的读超时。运行期间内存中的 targets 已快照，重新上传 Excel 不影响
+    进行中的任务。
+    """
     students = [s for s in _store["students"] if s["parent_email"]]
     if req.student_ids:
         idset = set(req.student_ids)
@@ -159,18 +164,29 @@ def send(req: SendRequest):
     if not targets:
         raise HTTPException(status_code=400, detail="没有可发送的学生（请检查是否缺少家长邮箱）")
 
-    results = []
-    mailer = _mailer(req.channel)
+    prepared = []
     for addr, s in targets:
         subject, html = _render(s)
         if req.mode == "test":
             subject = f"[测试 TEST] {subject}"
-        try:
-            mailer.send_email(addr, subject, html)
-            results.append({"student_id": s["student_id"], "to": addr, "ok": True})
-        except Exception as e:  # noqa: BLE001
-            results.append({"student_id": s["student_id"], "to": addr, "ok": False, "error": str(e)})
-        time.sleep(config.SEND_DELAY_SECONDS)
+        prepared.append(
+            {
+                "student_id": s["student_id"],
+                "name": s.get("student_name", ""),
+                "to": addr,
+                "subject": subject,
+                "html": html,
+            }
+        )
 
-    sent = sum(1 for r in results if r["ok"])
-    return {"sent": sent, "failed": len(results) - sent, "results": results}
+    try:
+        job = send_job.start(prepared, _mailer(req.channel), mode=req.mode, channel=req.channel)
+    except send_job.JobBusyError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"job_id": job["id"], "total": job["total"]}
+
+
+@app.get("/api/send/status")
+def send_status():
+    """当前/最近一次发送任务；前端每秒轮询，页面重开后靠它恢复进度。"""
+    return {"job": send_job.snapshot()}
