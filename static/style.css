@@ -115,10 +115,17 @@ body {
 }
 .send-progress.done .progress-bar { background: #2e7d32; }
 .send-progress.failed .progress-bar { background: var(--red); }
+/* 历史（上次发送）用灰色，与刚刚完成区分开 */
+.send-progress.history .progress-bar { background: #9aa5b1; }
 
 .send-result { margin-top: 14px; padding: 12px; border-radius: 6px; background: #f0f7ff; line-height: 1.8; }
 .send-result .ok { color: #2e7d32; }
 .send-result .fail { color: var(--red); }
+.send-result.history { background: #f6f7f9; }
+
+.result-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.result-detail { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.btn-small { padding: 3px 10px; font-size: 12px; }
 
 .modal {
   position: fixed;
