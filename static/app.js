@@ -130,7 +130,18 @@ function emailColumnOptions(data) {
   return list.sort((a, b) => a.index - b.index);
 }
 
+// 表头「收件人」下方标注实际取自 Excel 的哪个字段，随收件列一起更新
+let currentEmailColumn = null;
+
+function renderEmailColumnHeader() {
+  const info = currentEmailColumn;
+  $("th-email-sub").textContent = !info ? "" : info.header || `${info.letter} 列（无表头）`;
+}
+
 function renderEmailColumn(data) {
+  currentEmailColumn = data.uploaded ? data.email_column_info || null : null;
+  renderEmailColumnHeader();
+
   const row = $("email-column-row");
   if (!data.uploaded) {
     row.classList.add("hidden");
