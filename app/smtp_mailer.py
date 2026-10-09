@@ -6,6 +6,7 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr
+from typing import Optional
 
 from . import config
 
@@ -62,11 +63,55 @@ def test_connection() -> dict:
 
 def send_email(recipient: str, subject: str, html_body: str) -> None:
     """发送一封邮件；成功返回 None，失败抛 MailerError。"""
-    msg = _build_message(recipient, subject, html_body)
-    server = _connect()
-    try:
-        server.sendmail(config.SMTP_FROM, [recipient], msg.as_string())
-    except Exception as e:  # noqa: BLE001
-        raise MailerError(f"SMTP 发送失败：{e}")
-    finally:
-        server.quit()
+    with session() as s:
+        s.send(recipient, subject, html_body)
+
+
+class _SmtpSession:
+    """一条连接的发送会话：整批复用同一次 TCP + TLS + 登录。"""
+
+    def __init__(self) -> None:
+        self._server: Optional[smtplib.SMTP] = None
+
+    def __enter__(self) -> "_SmtpSession":
+        self._server = _connect()  # 连接/登录失败直接抛出，由调用方整批标记失败
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        self.close()
+        return False
+
+    def close(self) -> None:
+        if self._server is None:
+            return
+        try:
+            self._server.quit()
+        except Exception:  # noqa: BLE001
+            pass  # 关闭阶段的异常不影响已发出的邮件
+        self._server = None
+
+    def send(self, recipient: str, subject: str, html_body: str) -> None:
+        """发送一封邮件；成功返回 None，失败抛 MailerError。"""
+        msg = _build_message(recipient, subject, html_body)
+        try:
+            self._server.sendmail(config.SMTP_FROM, [recipient], msg.as_string())
+            return
+        except (smtplib.SMTPServerDisconnected, OSError) as e:
+            # 长连接可能被服务器掐断（空闲超时/连接数限制）：重连后重试本封一次
+            self._reconnect(e)
+        try:
+            self._server.sendmail(config.SMTP_FROM, [recipient], msg.as_string())
+        except Exception as e:  # noqa: BLE001
+            raise MailerError(f"SMTP 发送失败：{e}")
+
+    def _reconnect(self, cause: Exception) -> None:
+        self.close()
+        try:
+            self._server = _connect()
+        except MailerError as e:
+            raise MailerError(f"SMTP 连接中断且重连失败（{cause}）：{e}")
+
+
+def session() -> _SmtpSession:
+    """返回可复用的发送会话；进入 with 时才真正建连。"""
+    return _SmtpSession()
