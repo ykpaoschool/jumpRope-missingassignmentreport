@@ -23,11 +23,15 @@ function esc(s) {
 
 async function api(path, options = {}) {
   const resp = await fetch(path, options);
-  const data = await resp.json().catch(() => ({}));
+  const data = await resp.json().catch(() => null);
   if (!resp.ok) {
-    const err = new Error(data.detail || data.error || `请求失败 (${resp.status})`);
+    const err = new Error((data && (data.detail || data.error)) || `请求失败 (${resp.status})`);
     err.status = resp.status;
     throw err;
+  }
+  if (data === null) {
+    // 反代错误页之类的非 JSON 响应：报清楚，别让调用方读出不存在的字段
+    throw new Error(`服务返回了非 JSON 响应 (${resp.status})，请强制刷新页面后重试`);
   }
   return data;
 }
@@ -195,15 +199,26 @@ async function send() {
   if (ids.length) body.student_ids = ids;
 
   setSendButton(true);
+  restoredView = false; // 接下来展示的是本次提交的任务，不再是历史结果
   $("send-progress").classList.add("hidden");
   $("send-result").classList.add("hidden");
   try {
     // 202：任务已在后台启动，真正的进度靠轮询拿
-    await api("/api/send", {
+    const r = await api("/api/send", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+    if (!r.job_id) {
+      // 接口返回了 2xx 却没有任务信息：多半是前端已更新、后端还是旧版本
+      const box = $("send-result");
+      box.classList.remove("hidden");
+      box.innerHTML =
+        '<div class="fail">服务端未返回发送任务信息。可能是服务端仍是旧版本，' +
+        "请重启服务后强制刷新页面（Cmd/Ctrl+Shift+R）再试。</div>";
+      setSendButton(false);
+      return;
+    }
     startPolling();
   } catch (e) {
     setSendButton(false);
@@ -274,8 +289,16 @@ async function pollStatus() {
   }
 }
 
+// 页面打开时恢复的、已结束的历史任务：必须与本次会话刚发出的结果区分显示，
+// 否则刚打开页面就看到一屏绿色对勾，会误以为邮件是自己刚发的。
+let restoredView = false;
+
 function renderJob(job) {
   if (!job) return;
+  // 结果列表可能来自旧版本或被截断，永远按数组处理，避免整页脚本被打断
+  const results = Array.isArray(job.results) ? job.results : [];
+  const running = job.status === "running";
+  const historical = restoredView && !running;
   const done = job.sent + job.failed;
   const pct = job.total ? Math.round((done / job.total) * 100) : 0;
 
@@ -283,8 +306,10 @@ function renderJob(job) {
   $("progress-count").textContent = `已发送 ${job.sent} / ${job.total} · 失败 ${job.failed}`;
 
   const label = $("progress-label");
-  if (job.status === "running") {
+  if (running) {
     label.textContent = job.current ? `正在发送：${job.current}` : "正在发送…";
+  } else if (historical) {
+    label.textContent = `上次发送 · ${job.finished_at || ""} 结束`;
   } else if (job.status === "failed") {
     label.textContent = "发送中断";
   } else {
@@ -293,37 +318,61 @@ function renderJob(job) {
 
   const prog = $("send-progress");
   prog.classList.remove("hidden");
-  prog.classList.toggle("done", job.status === "done");
-  prog.classList.toggle("failed", job.status === "failed");
+  prog.classList.toggle("done", job.status === "done" && !historical);
+  prog.classList.toggle("failed", job.status === "failed" && !historical);
+  prog.classList.toggle("history", historical);
 
   const box = $("send-result");
   box.classList.remove("hidden");
+  box.classList.toggle("history", historical);
+  box.innerHTML = "";
+
   let head;
-  if (job.status === "running") {
+  if (running) {
     head = `<div>发送中：成功 <span class="ok">${job.sent}</span> 封，失败 <span class="fail">${job.failed}</span> 封（共 ${job.total} 封）。</div>`;
   } else if (job.status === "failed") {
-    head = `<div class="fail">整批发送未开始：${esc(job.error || "未知错误")}</div>`;
+    head = `<div class="fail">${historical ? `上次发送（${esc(job.started_at || "")}）未开始` : "整批发送未开始"}：${esc(job.error || "未知错误")}</div>`;
+  } else if (historical) {
+    head = `<div>上次发送结果（${esc(job.finished_at || "")} 完成）：成功 <span class="ok">${job.sent}</span> 封，失败 <span class="fail">${job.failed}</span> 封。</div>`;
   } else {
     head = `<div>发送完成：成功 <span class="ok">${job.sent}</span> 封，失败 <span class="fail">${job.failed}</span> 封。</div>`;
   }
-  box.innerHTML =
-    head +
-    job.results
-      .map(
-        (x) =>
-          `<div>${x.ok ? '<span class="ok">✓</span>' : '<span class="fail">✗</span>'} 学生 ${esc(x.student_id)} → ${esc(x.to)}${x.ok ? "" : `　<span class="fail">${esc(x.error)}</span>`}</div>`
-      )
-      .join("");
+  const headNode = el("div", { class: "result-head", html: head });
+  box.appendChild(headNode);
+
+  if (!results.length) return;
+
+  const detail = el("div", { class: "result-detail" });
+  detail.innerHTML = results
+    .map(
+      (x) =>
+        `<div>${x.ok ? '<span class="ok">✓</span>' : '<span class="fail">✗</span>'} 学生 ${esc(x.student_id)} → ${esc(x.to)}${x.ok ? "" : `　<span class="fail">${esc(x.error)}</span>`}</div>`
+    )
+    .join("");
+
+  const toggle = el("button", { class: "btn btn-ghost btn-small" });
+  const syncToggle = () => {
+    toggle.textContent = detail.classList.contains("hidden") ? `展开明细（${results.length} 条）` : "收起明细";
+  };
+  toggle.addEventListener("click", () => {
+    detail.classList.toggle("hidden");
+    syncToggle();
+  });
+  headNode.appendChild(toggle);
+  detail.classList.toggle("hidden", historical); // 历史结果默认折叠
+  syncToggle();
+  box.appendChild(detail);
 }
 
-// 页面打开时先查一次：任务还在跑就接着轮询，已结束就展示最近一次结果
+// 页面打开时先查一次：任务还在跑就接着轮询，已结束就作为「上次发送」展示
 async function restoreSendState() {
   try {
     const data = await api("/api/send/status");
     const job = data.job;
     if (!job) return;
+    restoredView = job.status !== "running";
     renderJob(job);
-    if (job.status === "running") startPolling();
+    if (!restoredView) startPolling();
   } catch (e) {
     // 恢复失败不影响其他功能，静默忽略
   }

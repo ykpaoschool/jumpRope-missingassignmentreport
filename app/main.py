@@ -16,6 +16,23 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 
 app = FastAPI(title="Missing Work Mailer")
+
+
+@app.middleware("http")
+async def no_cache_assets(request, call_next):
+    """首页与静态资源每次都回源校验，避免部署新版本后浏览器继续跑旧版 app.js。
+
+    前后端版本错配是静默故障：旧 JS 配新接口会报出与真实原因无关的
+    TypeError（"Cannot read properties of undefined"），而邮件其实已经发出去了。
+    no-cache 只要求回源校验，未变更时仍是 304，单机内网工具无性能顾虑。
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # 内存缓存：仅适合单机单人内部工具
