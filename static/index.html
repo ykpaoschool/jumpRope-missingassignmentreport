@@ -23,6 +23,11 @@
         <input type="file" id="file-input" accept=".xlsx,.xls" />
         <button id="btn-upload" class="btn btn-primary">上传并解析</button>
       </div>
+      <div id="email-column-row" class="email-column hidden">
+        <label class="group-label" for="email-column-select">收件邮箱列</label>
+        <span id="email-column-static" class="hint"></span>
+        <select id="email-column-select" class="hidden"></select>
+      </div>
       <div id="summary" class="summary hidden"></div>
       <ul id="warnings" class="warnings"></ul>
     </section>
