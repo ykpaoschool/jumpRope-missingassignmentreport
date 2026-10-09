@@ -24,7 +24,11 @@ function esc(s) {
 async function api(path, options = {}) {
   const resp = await fetch(path, options);
   const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new Error(data.detail || data.error || `请求失败 (${resp.status})`);
+  if (!resp.ok) {
+    const err = new Error(data.detail || data.error || `请求失败 (${resp.status})`);
+    err.status = resp.status;
+    throw err;
+  }
   return data;
 }
 
@@ -190,34 +194,147 @@ async function send() {
   const body = { mode, channel: currentChannel(), test_email: testEmail || null };
   if (ids.length) body.student_ids = ids;
 
-  const btn = $("btn-send");
-  btn.disabled = true;
-  btn.textContent = "发送中…";
-  const box = $("send-result");
-  box.classList.add("hidden");
+  setSendButton(true);
+  $("send-progress").classList.add("hidden");
+  $("send-result").classList.add("hidden");
   try {
-    const r = await api("/api/send", {
+    // 202：任务已在后台启动，真正的进度靠轮询拿
+    await api("/api/send", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    box.classList.remove("hidden");
-    box.innerHTML =
-      `<div>发送完成：成功 <span class="ok">${r.sent}</span> 封，失败 <span class="fail">${r.failed}</span> 封。</div>` +
-      r.results
-        .map(
-          (x) =>
-            `<div>${x.ok ? '<span class="ok">✓</span>' : '<span class="fail">✗</span>'} 学生 ${esc(x.student_id)} → ${esc(x.to)}${x.ok ? "" : `　<span class="fail">${esc(x.error)}</span>`}</div>`
-        )
-        .join("");
+    startPolling();
   } catch (e) {
+    setSendButton(false);
+    if (e.status === 409) {
+      // 已有任务在跑：把它的进度接过来显示，而不是干瞪眼
+      startPolling();
+      return;
+    }
+    const box = $("send-result");
     box.classList.remove("hidden");
     box.innerHTML = `<div class="fail">发送失败：${esc(e.message)}</div>`;
-  } finally {
-    btn.disabled = false;
-    btn.textContent = "发送";
   }
 }
+
+// ---- 发送进度 ----
+const POLL_INTERVAL_MS = 1000;
+const MAX_POLL_FAILURES = 5;
+
+let pollTimer = null;
+let pollInFlight = false;
+let pollFailures = 0;
+let jobRunning = false;
+
+function setSendButton(busy) {
+  const btn = $("btn-send");
+  btn.disabled = busy;
+  btn.textContent = busy ? "发送中…" : "发送";
+}
+
+function startPolling() {
+  jobRunning = true;
+  setSendButton(true);
+  if (pollTimer) return;
+  pollStatus();
+  pollTimer = setInterval(pollStatus, POLL_INTERVAL_MS);
+}
+
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+  jobRunning = false;
+}
+
+async function pollStatus() {
+  if (pollInFlight) return; // 上一次请求还没回来，跳过这一轮
+  pollInFlight = true;
+  try {
+    const data = await api("/api/send/status");
+    pollFailures = 0;
+    renderJob(data.job);
+    if (!data.job || data.job.status !== "running") {
+      stopPolling();
+      setSendButton(false);
+    }
+  } catch (e) {
+    // 偶发失败（例如网络抖动）继续轮询；连续失败说明服务不可用，停下来别刷屏
+    if (++pollFailures >= MAX_POLL_FAILURES) {
+      stopPolling();
+      setSendButton(false);
+      const box = $("send-result");
+      box.classList.remove("hidden");
+      box.innerHTML = `<div class="fail">无法获取发送进度：${esc(e.message)}</div>`;
+    }
+  } finally {
+    pollInFlight = false;
+  }
+}
+
+function renderJob(job) {
+  if (!job) return;
+  const done = job.sent + job.failed;
+  const pct = job.total ? Math.round((done / job.total) * 100) : 0;
+
+  $("progress-bar").style.width = `${pct}%`;
+  $("progress-count").textContent = `已发送 ${job.sent} / ${job.total} · 失败 ${job.failed}`;
+
+  const label = $("progress-label");
+  if (job.status === "running") {
+    label.textContent = job.current ? `正在发送：${job.current}` : "正在发送…";
+  } else if (job.status === "failed") {
+    label.textContent = "发送中断";
+  } else {
+    label.textContent = "发送完成";
+  }
+
+  const prog = $("send-progress");
+  prog.classList.remove("hidden");
+  prog.classList.toggle("done", job.status === "done");
+  prog.classList.toggle("failed", job.status === "failed");
+
+  const box = $("send-result");
+  box.classList.remove("hidden");
+  let head;
+  if (job.status === "running") {
+    head = `<div>发送中：成功 <span class="ok">${job.sent}</span> 封，失败 <span class="fail">${job.failed}</span> 封（共 ${job.total} 封）。</div>`;
+  } else if (job.status === "failed") {
+    head = `<div class="fail">整批发送未开始：${esc(job.error || "未知错误")}</div>`;
+  } else {
+    head = `<div>发送完成：成功 <span class="ok">${job.sent}</span> 封，失败 <span class="fail">${job.failed}</span> 封。</div>`;
+  }
+  box.innerHTML =
+    head +
+    job.results
+      .map(
+        (x) =>
+          `<div>${x.ok ? '<span class="ok">✓</span>' : '<span class="fail">✗</span>'} 学生 ${esc(x.student_id)} → ${esc(x.to)}${x.ok ? "" : `　<span class="fail">${esc(x.error)}</span>`}</div>`
+      )
+      .join("");
+}
+
+// 页面打开时先查一次：任务还在跑就接着轮询，已结束就展示最近一次结果
+async function restoreSendState() {
+  try {
+    const data = await api("/api/send/status");
+    const job = data.job;
+    if (!job) return;
+    renderJob(job);
+    if (job.status === "running") startPolling();
+  } catch (e) {
+    // 恢复失败不影响其他功能，静默忽略
+  }
+}
+
+window.addEventListener("beforeunload", (e) => {
+  if (!jobRunning) return;
+  e.preventDefault();
+  e.returnValue = "发送任务正在进行中。关闭页面不会中断发送，但将无法实时查看进度，可重新打开页面继续查看。";
+  return e.returnValue;
+});
 
 // ---- 绑定事件 ----
 $("btn-upload").addEventListener("click", upload);
@@ -237,3 +354,4 @@ document.querySelectorAll('input[name="mode"]').forEach((r) => r.addEventListene
 
 refreshStatus();
 syncTestEmailRow();
+restoreSendState();

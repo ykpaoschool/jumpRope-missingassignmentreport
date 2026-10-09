@@ -96,6 +96,26 @@ body {
 .field { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
 .field input { padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; min-width: 260px; }
 
+.send-progress { margin-top: 14px; padding: 12px; border-radius: 6px; background: #f0f7ff; }
+.progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+.progress-head #progress-count { color: var(--muted); }
+.progress-track { height: 8px; border-radius: 999px; background: #dbe6f3; overflow: hidden; }
+.progress-bar {
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: var(--blue);
+  transition: width 0.3s ease;
+}
+.send-progress.done .progress-bar { background: #2e7d32; }
+.send-progress.failed .progress-bar { background: var(--red); }
+
 .send-result { margin-top: 14px; padding: 12px; border-radius: 6px; background: #f0f7ff; line-height: 1.8; }
 .send-result .ok { color: #2e7d32; }
 .send-result .fail { color: var(--red); }
