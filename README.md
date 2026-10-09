@@ -9,6 +9,8 @@ Office 365 共享邮箱（应用凭据，非交互式）批量发送给家长。
 - 邮件正文**中英双语**，以表格列出：课程名称 / 老师 / 评估标题 / 截止日期 / 缺交代码，
   并附缺交代码释义（M: 缺交作业、X: 未完成作业）与「未按时提交作业处理程序」链接。
 - 待发送列表 + 单封邮件预览 + 测试/正式两种发送模式 + 发送结果明细。
+- 发送在后台任务中进行：提交后页面立即返回，进度条实时显示「已发送 / 总数 / 失败数」与逐条结果；
+  发送期间可以关闭页面，重新打开仍能看到当前进度或最近一次的发送结果。同一时间只允许一个发送任务。
 - 两种发送渠道：Office 365 (Graph) 与 SMTP（测试用），界面上可切换。
 - 家长邮箱缺失的学生会被标红并跳过发送。
 
@@ -51,7 +53,7 @@ cp .env.example .env   # 然后填写下面的凭据
 | `SENDER_DISPLAY_NAME` | 邮件落款机构名，默认「包校初中部学术办公室/YK Pao Middle School Academic Affairs Office」 |
 | `SENDER_CONTACT_EMAIL` | 邮件落款联系邮箱，默认 `hq-aao@ykpaoschool.cn` |
 | `PROCEDURE_URL` | 「查看未按时提交作业处理程序」的跳转地址，留空则该句显示为普通文字 |
-| `SEND_DELAY_SECONDS` | 每封发送间隔（秒，默认 0.5） |
+| `SEND_DELAY_SECONDS` | 每封发送间隔（秒，默认 0.5）。名单较长（100 封以上）时可适当调小，例如 0.2 |
 
 ## SMTP 快速测试（无需 Azure）
 
@@ -114,6 +116,9 @@ GitHub Container Registry（`ghcr.io/ykpaoschool/jumprope-missingassignmentrepor
 docker run --rm -p 8000:8000 --env-file .env ghcr.io/ykpaoschool/jumprope-missingassignmentreport:latest
 ```
 
+反向代理（如 Nginx Proxy Manager）保持默认配置即可；若想更保守，可在该 Proxy Host 的
+Advanced 里把 `proxy_read_timeout` 调大（例如 300s）。注意 uvicorn 必须保持单 worker。
+
 ## 启动
 
 ```bash
@@ -129,9 +134,11 @@ uvicorn app.main:app --reload
 2. 点「预览」查看任意学生的邮件内容。
 3. 选择发送渠道（Graph / SMTP），先用**测试模式**向测试邮箱发送一封样例确认无误。
 4. 切换**正式发送**，勾选学生（或直接全部），确认后发送。
+5. 发送开始后页面显示进度条与逐条结果；期间可以关闭页面，重新打开会继续显示进度或最近一次结果。
+   同一时间只能有一个发送任务，正在发送时再次点击「发送」会提示「已有发送任务进行中」。
 
 ## 注意事项
 
-- 解析结果保存在内存中，重启后需重新上传；适合单机单人使用。
+- 解析结果与发送任务进度都保存在内存中，重启后需重新上传；适合单机单人使用。
 - 正式发送会真实发邮件给家长，请先小批量验证。
 - 缺少家长邮箱的学生不会发送，会在列表中标红提示。
