@@ -1,0 +1,18 @@
+# 生产部署配置：直接用 CI 构建好的 GHCR 镜像，服务器上不需要源码。
+# 首次部署与升级命令见 README「Docker」一节，核心是：
+#   docker compose pull && docker compose up -d
+services:
+  mailer:
+    # 默认跟随 latest；回滚时用 IMAGE_TAG=sha-xxxxxxx 指到某次构建，无需改本文件
+    image: ghcr.io/ykpaoschool/jumprope-missingassignmentreport:${IMAGE_TAG:-latest}
+    container_name: missing-work-mailer
+    # 宿主机重启 / docker 重启后自动拉起（手动 down 的不会）
+    restart: unless-stopped
+    # 凭据来自同目录的 .env，不写进镜像
+    env_file: .env
+    ports:
+      - "${HOST_PORT:-8000}:8000"
+    volumes:
+      # 发送日志（SQLite）存到项目目录下的 data/：直接 sqlite3 查看、直接 cp 备份。
+      # 容器内以 uid 1000 运行，该目录必须对它可写，见 README 的说明。
+      - ./data:/app/data
