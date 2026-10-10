@@ -193,3 +193,88 @@ assert all(s["parent_email"] == "parent@example.com" for s in r5h["students"])
 assert not any("缺少家长邮箱" in w for w in r5h["warnings"]), r5h["warnings"]
 
 print("OK: multiple email columns (candidates / default / override / invalid) all pass")
+
+
+# 场景 6：一格多个邮箱 —— 逗号/分号、跨行并集、非法片段
+
+# 6a：逗号与分号都要认；email_count 数行、address_count 数地址
+multi_sep = build_multi(
+    ["Parent Email"],
+    [
+        [f"father{i}@example.com; mother{i}@example.com" if i % 2 == 0
+         else f"father{i}@example.com, mother{i}@example.com"]
+        for i in range(STUDENTS)
+    ],
+)
+r6a = parse_workbook(multi_sep)
+assert r6a["students"][0]["parent_email"] == "father0@example.com, mother0@example.com", r6a["students"][0]
+assert r6a["students"][1]["parent_email"] == "father1@example.com, mother1@example.com", r6a["students"][1]
+assert all(s["invalid_addresses"] == [] for s in r6a["students"]), r6a["students"]
+assert r6a["email_column_info"]["email_count"] == STUDENTS, r6a["email_column_info"]
+assert r6a["email_column_info"]["address_count"] == STUDENTS * 2, r6a["email_column_info"]
+assert r6a["email_column_info"]["sample"] == "father0@example.com", r6a["email_column_info"]
+assert not any("发送会被暂停" in w for w in r6a["warnings"]), r6a["warnings"]
+
+# 6b：一格多个地址的列，表头没有关键词也要成为候选列（整格匹配会漏掉这种列）
+multi_no_kw = build_multi(
+    ["联系人"], [[f"a{i}@example.com; b{i}@example.com"] for i in range(STUDENTS)]
+)
+r6b = parse_workbook(multi_no_kw)
+assert [
+    (c["index"], c["by_header"], c["email_count"], c["address_count"]) for c in r6b["email_columns"]
+] == [(13, False, STUDENTS, STUDENTS * 2)], r6b["email_columns"]
+assert r6b["email_column"] == 13  # 列数 14、表头无关键词 → 仍回退第 14 列，正好是这一列
+assert r6b["students"][0]["parent_email"] == "a0@example.com, b0@example.com", r6b["students"][0]
+
+
+def build_rows(email_rows):
+    """同一个学生的多行（每行一条缺交记录），邮箱列的取值由调用方给。"""
+    wb = Workbook(); ws = wb.active
+    ws.append(BASE_13 + ["Parent Email"])
+    for i, value in enumerate(email_rows):
+        ws.append(["9001", "08", "2031", None, "YK Pao", "8 MATH 数学", "8H", "Sue Li",
+                   "Formative", f"作业 {i}", 46273, "M", None, value])
+    buf = BytesIO(); wb.save(buf)
+    return buf.getvalue()
+
+
+# 6c：同一学生的多行填了不同地址 → 合并发送（并说明数据本身有出入）
+r6c = parse_workbook(build_rows(["father@example.com", "mother@example.com; father@example.com"]))
+assert len(r6c["students"]) == 1 and len(r6c["students"][0]["items"]) == 2, r6c["students"]
+assert r6c["students"][0]["parent_email"] == "father@example.com, mother@example.com", r6c["students"][0]
+assert any("多行家长邮箱不一致" in w for w in r6c["warnings"]), r6c["warnings"]
+
+# 6d：多行填的是同一组地址（只是顺序不同）→ 合并后只发一遍，也不该报「不一致」
+r6d = parse_workbook(build_rows(["a@example.com; b@example.com", "B@example.com, a@example.com"]))
+assert r6d["students"][0]["parent_email"] == "a@example.com, b@example.com", r6d["students"][0]
+assert not any("不一致" in w for w in r6d["warnings"]), r6d["warnings"]
+
+# 6e：含无法识别的片段 → 逐学生记下来 + 给一条「发送会被暂停」的提示（拦截在 main.send）
+r6e = parse_workbook(
+    build_multi(
+        ["Parent Email"],
+        [["father@example.com; 张先生"] if i == 0 else
+         (["13800000000"] if i == 1 else [f"parent{i}@example.com"])
+         for i in range(STUDENTS)],
+    )
+)
+assert r6e["students"][0]["parent_email"] == "father@example.com, 张先生", r6e["students"][0]
+assert r6e["students"][0]["invalid_addresses"] == ["张先生"], r6e["students"][0]
+assert r6e["students"][1]["invalid_addresses"] == ["13800000000"], r6e["students"][1]
+assert all(s["invalid_addresses"] == [] for s in r6e["students"][2:]), r6e["students"]
+# 非法片段照样算「有邮箱」：它会被拦下，而不是被当成缺邮箱的学生悄悄跳过
+assert not any("缺少家长邮箱" in w for w in r6e["warnings"]), r6e["warnings"]
+assert any("发送会被暂停" in w and "10000（张先生）" in w for w in r6e["warnings"]), r6e["warnings"]
+
+# 6f：邮箱列里放的是数字（openpyxl 读成 int）→ 当作非法片段，且解析不能炸
+numeric = build_multi(
+    ["Parent Email"],
+    [[13800000000] if i == 0 else [f"parent{i}@example.com"] for i in range(STUDENTS)],
+)
+r6f = parse_workbook(numeric)
+assert r6f["students"][0]["parent_email"] == "13800000000", r6f["students"][0]
+assert r6f["students"][0]["invalid_addresses"] == ["13800000000"], r6f["students"][0]
+assert not any("缺少家长邮箱" in w for w in r6f["warnings"]), r6f["warnings"]
+
+print("OK: 一格多个邮箱（逗号/分号/跨行并集/非法片段）all pass")
+

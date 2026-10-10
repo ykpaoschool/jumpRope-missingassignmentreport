@@ -274,14 +274,18 @@ srv.close()
 
 # ---- Graph 渠道：429 限流退避重试 ----
 graph_calls = []
+graph_bodies = []
 
 
 class FakeGraphHandler(BaseHTTPRequestHandler):
-    """按 statuses 顺序返回状态码（用完后一直返回最后一个），记录每次请求。"""
+    """按 statuses 顺序返回状态码（用完后一直返回最后一个），记录每次请求与请求体。"""
 
     statuses = [202]
 
     def do_POST(self):
+        # 请求体必须先读完再回响应，否则客户端会拿到 broken pipe
+        length = int(self.headers.get("Content-Length") or 0)
+        graph_bodies.append(json.loads(self.rfile.read(length) or b"{}"))
         graph_calls.append(self.path)
         code = self.statuses[min(len(graph_calls) - 1, len(self.statuses) - 1)]
         body = json.dumps({"error": {"message": "Too many requests"}}).encode() if code != 202 else b""
@@ -332,6 +336,17 @@ try:
 except graph_mailer.MailerError as e:
     assert "500" in str(e), e
 assert len(graph_calls) == 1, "非限流错误不应重试"
+
+# 12. 一格多个家长邮箱：一封邮件的 toRecipients 里放下全部地址
+FakeGraphHandler.statuses = [202]
+graph_calls.clear()
+graph_bodies.clear()
+graph_mailer.send_email("father@example.com; mother@example.com", "主题", "<p>x</p>")
+assert len(graph_calls) == 1, graph_calls
+assert [
+    r["emailAddress"]["address"] for r in graph_bodies[0]["message"]["toRecipients"]
+] == ["father@example.com", "mother@example.com"], graph_bodies
+
 graph_srv.shutdown()
 
 print("OK: send_job 状态机 / 单任务并发拒绝 / 单封失败隔离 / 连接失败整批标记")
