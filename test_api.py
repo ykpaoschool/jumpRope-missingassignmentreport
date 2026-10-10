@@ -1,14 +1,19 @@
-"""验证收件邮箱列相关接口：上传 → 摘要 → 切换列 → 列表/预览同步刷新。
+"""验证收件邮箱列相关接口：上传 → 摘要 → 切换列 → 列表/预览同步刷新；以及发送日志接口。
 
 用 FastAPI 的 TestClient 直接打接口，不启动真实服务、不发信。
 """
 
+import os
+import tempfile
 from io import BytesIO
 
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
-from app import main
+from app import config, main, send_log
+
+# 发送日志接口会碰库：指向临时文件，避免创建/读取真实的 data/mailer.db
+config.DB_PATH = os.path.join(tempfile.mkdtemp(prefix="api-test-"), "mailer.db")
 
 client = TestClient(main.app)
 
@@ -74,4 +79,56 @@ assert client.post("/api/upload", files={"file": ("bad.xlsx", b"not an xlsx")}).
 # 6. 切换列不改变发送队列的取值口径：/api/send 用的就是这份列表
 assert all(x["parent_email"] for x in client.get("/api/students").json())
 
+# 7. 发送日志接口：空库时结构齐全、不含记录
+lg = client.get("/api/logs").json()
+assert set(lg) == {"date", "entries", "counts", "truncated", "dates", "db"}, lg
+assert lg["entries"] == [] and lg["dates"] == [] and lg["truncated"] is False, lg
+assert lg["counts"] == {"send": 0, "ok": 0, "failed": 0, "jobs": 0}, lg
+assert lg["db"]["ready"] is True and lg["db"]["path"].endswith("mailer.db"), lg["db"]
+
+# 8. 有记录后：默认取最近一天，筛选与 limit 参数生效
+send_log.record(
+    {
+        "event": "send",
+        "job_id": "job-api",
+        "mode": "live",
+        "channel": "graph",
+        "student_id": "10001",
+        "student_name": "李四",
+        "grade": "08",
+        "class_name": "2031",
+        "item_count": 1,
+        "recipient": "parent0@example.com",
+        "subject": "主题",
+        "ok": 1,
+    }
+)
+send_log.record(
+    {
+        "event": "send",
+        "job_id": "job-api",
+        "mode": "live",
+        "channel": "graph",
+        "student_id": "10002",
+        "recipient": "parent1@example.com",
+        "subject": "主题",
+        "ok": 0,
+        "error": "模拟失败",
+    }
+)
+send_log.record({"event": "job_end", "job_id": "job-api", "status": "done", "sent": 1, "failed": 1})
+
+lg = client.get("/api/logs").json()
+assert len(lg["entries"]) == 3 and lg["counts"]["send"] == 2, lg
+assert lg["entries"][0]["event"] == "job_end", "最新在前"
+assert lg["entries"][1]["recipient"] == "parent1@example.com" and lg["entries"][1]["ok"] == 0, lg["entries"][1]
+assert lg["entries"][2]["class_name"] == "2031" and lg["entries"][2]["item_count"] == 1, lg["entries"][2]
+
+only_fail = client.get("/api/logs", params={"ok": "fail"}).json()
+assert [e["student_id"] for e in only_fail["entries"]] == ["10002"], only_fail
+assert client.get("/api/logs", params={"ok": "ok"}).json()["counts"]["send"] == 2, "counts 不受筛选影响"
+assert client.get("/api/logs", params={"limit": 1}).json()["truncated"] is True
+assert client.get("/api/logs", params={"date": "1999-12-31"}).json()["entries"] == []
+
 print("OK: email column API (upload / switch / restore / invalid) all pass")
+print("OK: send log API (empty / records / filter / limit / unknown date) all pass")

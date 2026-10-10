@@ -1,6 +1,7 @@
 """从环境变量 / .env 读取配置。"""
 
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -35,6 +36,12 @@ def _as_float(value, default: float) -> float:
 
 
 SEND_DELAY_SECONDS = _as_float(os.getenv("SEND_DELAY_SECONDS", "0.5"), 0.5)
+
+# 发送日志（SQLite）的库文件。锚定到项目根的绝对路径（同 main.py 的 BASE_DIR / "static"），
+# 免得落点由 uvicorn 的 CWD 决定；容器里自然就是 /app/data/mailer.db。
+DB_PATH = os.getenv("DB_PATH", "").strip() or str(
+    Path(__file__).resolve().parent.parent / "data" / "mailer.db"
+)
 
 
 def is_configured() -> bool:

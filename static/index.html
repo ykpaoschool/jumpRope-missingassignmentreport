@@ -88,6 +88,42 @@
       </div>
       <div id="send-result" class="send-result hidden"></div>
     </section>
+
+    <!-- 发送日志 -->
+    <section class="card">
+      <h2>4. 发送日志</h2>
+      <div class="table-toolbar">
+        <label class="group-label" for="log-date">日期</label>
+        <select id="log-date"></select>
+        <label class="group-label" for="log-ok">结果</label>
+        <select id="log-ok">
+          <option value="all">全部</option>
+          <option value="ok">仅成功</option>
+          <option value="fail">仅失败</option>
+        </select>
+        <button id="btn-log-refresh" class="btn btn-ghost">刷新</button>
+        <span id="log-hint" class="hint"></span>
+      </div>
+      <ul id="log-error" class="warnings"></ul>
+      <div class="table-scroll">
+        <table class="grid">
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>结果</th>
+              <th>学生</th>
+              <th>班级</th>
+              <th>收件人</th>
+              <th>模式·渠道</th>
+              <th>主题 / 错误原因</th>
+            </tr>
+          </thead>
+          <tbody id="log-tbody">
+            <tr><td colspan="7" class="empty">暂无发送记录</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
   </main>
 
   <!-- 预览弹窗 -->

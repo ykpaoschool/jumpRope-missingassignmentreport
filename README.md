@@ -14,6 +14,8 @@ Office 365 共享邮箱（应用凭据，非交互式）批量发送给家长。
   发送期间可以关闭页面，重新打开仍能看到当前进度或最近一次的发送结果。同一时间只允许一个发送任务。
 - 两种发送渠道：Office 365 (Graph) 与 SMTP（测试用），界面上可切换。
 - 家长邮箱缺失的学生会被标红并跳过发送。
+- **发送日志**：每次投递（成功 / 失败）与每一批的开始、结束都记入本地 SQLite
+  （`data/mailer.db`），页面第 4 节可按日期与结果翻看。重启服务后记录仍在。
 
 ## 数据格式
 
@@ -62,6 +64,7 @@ cp .env.example .env   # 然后填写下面的凭据
 | `SENDER_CONTACT_EMAIL` | 邮件落款联系邮箱，默认 `hq-aao@ykpaoschool.cn` |
 | `PROCEDURE_URL` | 「查看未按时提交作业处理程序」的跳转地址，留空则该句显示为普通文字 |
 | `SEND_DELAY_SECONDS` | 每封发送间隔（秒，默认 0.5）。名单较长（100 封以上）时可适当调小，例如 0.2 |
+| `DB_PATH` | 发送日志的 SQLite 库文件路径，默认 `<项目根>/data/mailer.db`；填了就以它为准 |
 
 ## SMTP 快速测试（无需 Azure）
 
@@ -107,11 +110,12 @@ cp .env.example .env   # 然后填写下面的凭据
 
 ## Docker
 
-本地构建并运行（凭据通过 `--env-file` 注入，不写入镜像）：
+本地构建并运行（凭据通过 `--env-file` 注入，不写入镜像）。`-v mailer-data:/app/data`
+把发送日志落到具名卷里，容器重建后记录仍在：
 
 ```bash
 docker build -t missing-work-mailer .
-docker run --rm -p 8000:8000 --env-file .env missing-work-mailer
+docker run --rm -p 8000:8000 --env-file .env -v mailer-data:/app/data missing-work-mailer
 ```
 
 打开 http://127.0.0.1:8000 。
@@ -121,8 +125,13 @@ GitHub Container Registry（`ghcr.io/ykpaoschool/jumprope-missingassignmentrepor
 运行方式：
 
 ```bash
-docker run --rm -p 8000:8000 --env-file .env ghcr.io/ykpaoschool/jumprope-missingassignmentreport:latest
+docker run --rm -p 8000:8000 --env-file .env -v mailer-data:/app/data \
+  ghcr.io/ykpaoschool/jumprope-missingassignmentreport:latest
 ```
+
+> 若改用 bind mount（如 `-v $(pwd)/data:/app/data`）指向宿主目录，注意容器内以 uid 1000 运行，
+> 宿主目录需对该 uid 可写（`sudo chown -R 1000:1000 ./data`），否则发送日志写不进去
+> （页面第 4 节会给出提示，发信本身不受影响）。
 
 反向代理（如 Nginx Proxy Manager）保持默认配置即可；若想更保守，可在该 Proxy Host 的
 Advanced 里把 `proxy_read_timeout` 调大（例如 300s）。注意 uvicorn 必须保持单 worker。
@@ -144,10 +153,35 @@ uvicorn app.main:app --reload
 4. 切换**正式发送**，勾选学生（或直接全部），确认后发送。
 5. 发送开始后页面显示进度条与逐条结果；期间可以关闭页面，重新打开会继续显示进度或最近一次结果。
    同一时间只能有一个发送任务，正在发送时再次点击「发送」会提示「已有发送任务进行中」。
+6. 到第 4 节「发送日志」核对这次发送；一批发完页面会自动刷新该节，也可以手动「刷新」。
+
+## 发送日志
+
+第 4 节的数据来自 SQLite 单文件（默认 `data/mailer.db`，可用 `DB_PATH` 改），
+服务重启、容器重建都不会丢；内存里的发送进度则会丢，两者互补。
+
+- 一次发送会写入三类记录：`job_start`（本批开始，含文件名与收件列）、`send`（每封投递一行，
+  成功与失败各一行）、`job_end`（整批结束：成功几封、失败几封，或整批没能开始的原因）。
+- 每条记录带发送那一刻的快照：学生、年级、班级、缺交条数、收件人、主题或错误原因、耗时、
+  模式（测试 / 正式）与渠道（Graph / SMTP）。
+- 页面可按日期（最近 90 天里有记录的日期）和结果（全部 / 仅成功 / 仅失败）筛选，
+  右上角显示当日统计。整批在连接阶段就失败时一封都不会发出，这种情况由 `job_end` 记录体现。
+- **不记录邮件正文**，所以日志不能单独用来重发；重发要重新上传同一份 Excel，
+  日志里的学生 ID 与收件人可用来核对「上次失败的这些人」。
+- 数据库不可用时（例如容器内目录权限不对），第 4 节会显示红色提示与库文件路径；
+  此时**发信照常进行**，只是这些记录不会留存。
+- 日志**不自动清理**，长期使用会持续增长。需要时可自行备份或删除该文件：
+
+  ```bash
+  sqlite3 data/mailer.db "select ts, event, student_id, class_name, recipient, ok, error from send_log order by id desc limit 20"
+  cp data/mailer.db ~/mailer-backup-$(date +%F).db
+  ```
 
 ## 注意事项
 
 - 解析结果与发送任务进度都保存在内存中，**重启服务**后需重新上传（刷新页面不会丢：摘要、待发送列表、
-  收件邮箱列的选择都会自动恢复）；适合单机单人使用。
+  收件邮箱列的选择都会自动恢复，发送日志也会一并保留）；适合单机单人使用。
 - 正式发送会真实发邮件给家长，请先小批量验证。
 - 缺少家长邮箱的学生不会发送，会在列表中标红提示。
+- `data/mailer.db` 内含学生姓名、学号、班级与家长邮箱等个人信息，属内部数据：不要外传，
+  不要提交到仓库（`data/` 已在 `.gitignore` 与 `.dockerignore` 中排除）。

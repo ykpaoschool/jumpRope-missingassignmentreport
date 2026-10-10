@@ -17,6 +17,9 @@ COPY static/ ./static/
 
 # Run as an unprivileged user
 RUN useradd --create-home --uid 1000 appuser
+# 发送日志（SQLite）落在这里：/app 由 root 创建且是 755，uid 1000 无权在其中新建目录，
+# 不预先建好并改属主的话，容器里日志会一写就失败
+RUN mkdir -p /app/data && chown appuser:appuser /app/data
 USER appuser
 
 EXPOSE 8000
