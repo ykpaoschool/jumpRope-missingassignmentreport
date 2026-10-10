@@ -110,28 +110,66 @@ cp .env.example .env   # 然后填写下面的凭据
 
 ## Docker
 
-本地构建并运行（凭据通过 `--env-file` 注入，不写入镜像）。`-v mailer-data:/app/data`
-把发送日志落到具名卷里，容器重建后记录仍在：
+### 本地构建并运行
+
+凭据通过 `--env-file` 注入，不写入镜像；`./data` 挂进容器存放发送日志，容器重建后记录仍在：
 
 ```bash
 docker build -t missing-work-mailer .
-docker run --rm -p 8000:8000 --env-file .env -v mailer-data:/app/data missing-work-mailer
+docker run --rm -p 8000:8000 --env-file .env -v "$(pwd)/data:/app/data" missing-work-mailer
 ```
 
 打开 http://127.0.0.1:8000 。
 
-镜像也可由 GitHub Actions 自动构建：推送到 `main` 分支或 `v*` 标签即触发，产物推送到
-GitHub Container Registry（`ghcr.io/ykpaoschool/jumprope-missingassignmentreport`，`main` 分支同时打 `latest` 标签）。
-运行方式：
+### 服务器部署（docker compose）
+
+镜像由 GitHub Actions 自动构建：推送到 `main` 分支或 `v*` 标签即触发，产物推送到 GitHub Container
+Registry（`ghcr.io/ykpaoschool/jumprope-missingassignmentreport`，`main` 分支同时打 `latest` 标签）。
+
+服务器上只需要 `compose.yaml` 与 `.env` 两个文件，放在同一个目录（项目目录）里：
 
 ```bash
-docker run --rm -p 8000:8000 --env-file .env -v mailer-data:/app/data \
-  ghcr.io/ykpaoschool/jumprope-missingassignmentreport:latest
+mkdir -p data && sudo chown -R 1000:1000 data   # 仅首次，见下方说明
+docker compose up -d                            # 首次会自动拉取镜像
 ```
 
-> 若改用 bind mount（如 `-v $(pwd)/data:/app/data`）指向宿主目录，注意容器内以 uid 1000 运行，
-> 宿主目录需对该 uid 可写（`sudo chown -R 1000:1000 ./data`），否则发送日志写不进去
-> （页面第 4 节会给出提示，发信本身不受影响）。
+以后每次升级就是一条命令，不再需要 stop / rm / image rm 那一串：
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+旧的镜像不会被自动删掉（同一次构建还挂着 `main`、`sha-<commit>` 等标签），留着不占多少事，
+而且回滚时本地直接就有。确实要清再手动删，或用下面的 `prune -a` 一次性清掉**所有**没被容器使用的镜像：
+
+```bash
+docker image rm <镜像ID>
+docker image prune -a -f
+```
+
+常用命令：
+
+```bash
+docker compose ps          # 查看状态
+docker compose logs -f     # 跟踪日志
+docker compose restart     # 重启
+docker compose down        # 停掉并删除容器，data/ 里的日志不受影响
+```
+
+回滚到某次构建（CI 同时会打 `sha-<commit>` 标签）：
+
+```bash
+IMAGE_TAG=sha-abc1234 docker compose up -d
+```
+
+> 容器对外端口默认 8000，需要改成别的：`HOST_PORT=8001 docker compose up -d`。
+>
+> `docker compose up -d` 会重建容器，**正在进行的发送批次会被打断**（日志里只有 `job_start`
+> 而没有 `job_end`）。请在两次发送之间升级。
+
+容器内以 uid 1000 运行，宿主 `data/` 目录必须对该 uid 可写，否则发送日志写不进去——页面第 4 节
+会红字提示库文件路径，发信本身不受影响。该目录若由 `docker compose` 自动创建则属主是 root，
+所以上面的 `chown` 不能省。
 
 反向代理（如 Nginx Proxy Manager）保持默认配置即可；若想更保守，可在该 Proxy Host 的
 Advanced 里把 `proxy_read_timeout` 调大（例如 300s）。注意 uvicorn 必须保持单 worker。
