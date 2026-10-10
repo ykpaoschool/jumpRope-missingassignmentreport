@@ -104,6 +104,9 @@ body {
 /* 表头下方的小字：标出这一列实际取自 Excel 的哪个字段 */
 .grid thead th .th-sub { display: block; margin-top: 2px; font-weight: normal; font-size: 11px; color: var(--muted); }
 .grid tr.no-email td { color: var(--red); }
+/* 地址里有无法识别的片段：这一行会让整批发送被暂停，与「缺邮箱」的跳过要能分辨 */
+.grid tr.bad-email td { color: var(--red); }
+.grid td .bad-addr { margin-top: 2px; font-size: 11px; color: var(--red); }
 .grid .empty { text-align: center; color: var(--muted); padding: 20px; }
 
 /* 发送日志：job_start / job_end 这类整批事件跨列成灰底小字，与逐封记录区分 */

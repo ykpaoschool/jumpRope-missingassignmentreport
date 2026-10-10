@@ -103,9 +103,14 @@ async function upload() {
 function renderSummary(s) {
   const box = $("summary");
   box.classList.remove("hidden");
+  // 有学生填了多个家长邮箱时，光看「几名有邮箱」并不知道会发到几个地址
+  const extra =
+    s.total_recipients > s.with_email
+      ? `（共 <span class="num">${s.total_recipients}</span> 个收件地址）`
+      : "";
   box.innerHTML =
     `共 <span class="num">${s.total_students}</span> 名学生，` +
-    `<span class="num">${s.with_email}</span> 名有家长邮箱，` +
+    `<span class="num">${s.with_email}</span> 名有家长邮箱${extra}，` +
     `<span class="num">${s.no_email.length}</span> 名缺邮箱，` +
     `共 <span class="num">${s.total_items}</span> 条缺交记录`;
   const w = $("warnings");
@@ -117,7 +122,12 @@ function renderSummary(s) {
 // ---- 收件邮箱列 ----
 function columnLabel(c) {
   const name = c.header ? ` · ${c.header}` : "";
-  const count = c.email_count ? `${c.email_count} 条邮箱` : "无有效邮箱";
+  // address_count 是后加的字段，旧版后端没有时按行数显示
+  const addrs = c.address_count == null ? c.email_count : c.address_count;
+  let count;
+  if (!c.email_count) count = "无有效邮箱";
+  else if (addrs !== c.email_count) count = `${c.email_count} 行 · ${addrs} 个地址`;
+  else count = `${c.email_count} 条邮箱`;
   return `${c.letter} 列${name}（${count}）`;
 }
 
@@ -202,24 +212,36 @@ function renderTable() {
     return;
   }
   for (const s of students) {
+    const bad = Array.isArray(s.invalid_addresses) ? s.invalid_addresses : [];
     const cb = el("input", { type: "checkbox", "data-id": s.student_id, class: "row-check" });
     cb.checked = !s.parent_email ? false : true;
     cb.disabled = !s.parent_email;
     const btn = el("button", { class: "btn btn-ghost", text: "预览" });
     btn.addEventListener("click", () => preview(s.student_id));
-    const tr = el("tr", s.parent_email ? {} : { class: "no-email" }, [
+    // 缺邮箱（跳过该学生）与地址无法识别（暂停整批）是两种不同的红
+    const rowClass = !s.parent_email ? "no-email" : bad.length ? "bad-email" : "";
+    const tr = el("tr", rowClass ? { class: rowClass } : {}, [
       el("td", {}, [cb]),
       el("td", { text: s.student_id }),
       el("td", { text: s.student_name || "—" }),
       el("td", { text: s.grade }),
       el("td", { text: s["class"] }),
-      el("td", { text: s.parent_email || "（缺邮箱）" }),
+      emailCell(s, bad),
       el("td", { text: s.item_count }),
       el("td", {}, [btn]),
     ]);
     tbody.appendChild(tr);
   }
   syncCheckAll();
+}
+
+function emailCell(s, bad) {
+  const td = el("td", { text: s.parent_email || "（缺邮箱）" });
+  if (bad.length) {
+    // 这几个片段会让整批发送被暂停，必须在列表里点出来，而不是只写在提示里
+    td.appendChild(el("div", { class: "bad-addr", text: `含无法识别的地址：${bad.join("、")}` }));
+  }
+  return td;
 }
 
 function selectedIds() {
@@ -266,7 +288,12 @@ async function send() {
   if (mode === "test") {
     confirmMsg = `测试模式：将把${ids.length ? `选中的 ${ids.length} 名学生` : "1 名样例学生"}的邮件发送到测试邮箱 ${testEmail}。继续？`;
   } else {
-    confirmMsg = `正式发送：将向${ids.length ? `选中的 ${ids.length} 名` : `全部 ${students.filter((s) => s.parent_email).length} 名`}学生的家长邮箱发送邮件。此操作不可撤销，确认继续？`;
+    const live = students.filter((s) => s.parent_email && (!ids.length || ids.includes(s.student_id)));
+    // 邮件数按学生算、地址数按地址算：一个学生填了两个家长邮箱，点确认前就该知道是发给两个地址
+    const addrs = live.reduce((sum, s) => sum + (s.recipient_count || 1), 0);
+    const addrNote =
+      addrs > live.length ? `，实际收件地址共 ${addrs} 个（部分学生填了多个家长邮箱）` : "";
+    confirmMsg = `正式发送：将向${ids.length ? `选中的 ${live.length} 名` : `全部 ${live.length} 名`}学生的家长邮箱发送 ${live.length} 封邮件${addrNote}。此操作不可撤销，确认继续？`;
   }
   if (!confirm(confirmMsg)) return;
 

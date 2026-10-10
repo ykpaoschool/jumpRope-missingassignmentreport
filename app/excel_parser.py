@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import datetime
-import re
 from io import BytesIO
 
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.datetime import from_excel
+
+from . import recipients
 
 # 表头名 -> 内部字段名
 COL_HEADERS = {
@@ -25,9 +26,6 @@ COL_HEADERS = {
 
 # 用于定位家长邮箱列的表头关键词
 EMAIL_KEYWORDS = ("email", "mail", "邮箱", "家长")
-
-# 判定单元格「像邮箱」的正则：仅用于探测候选列与提示选错列，不参与发送时的取值
-EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 # 学生姓名列的表头候选（按优先级）；整名列缺失时回退到 First + Last 拼接
 NAME_HEADERS = ("Student Name", "Student Full Name", "Student Last First", "Student Last Name First")
@@ -71,27 +69,38 @@ def _to_date_str(value) -> str:
     return s
 
 
-def _looks_like_email(value) -> bool:
-    return bool(EMAIL_RE.match(_clean(value)))
+def _cell_addresses(value) -> list[str]:
+    """单元格里的有效收件地址：一格塞了多个（逗号/分号分隔）时全部返回。
+
+    先 _clean() 再拆：openpyxl 会把数字读成 int/float（邮箱列里放电话就是这种情况）。
+    """
+    return [a for a in recipients.split(_clean(value)) if recipients.is_address(a)]
 
 
 def _column_meta(index: int, header: list[str], data_rows: list) -> dict:
-    """统计某一列的邮箱情况，供界面展示（列字母 / 表头 / 有效邮箱条数 / 样例）。"""
-    count = 0
+    """统计某一列的邮箱情况，供界面展示（列字母 / 表头 / 有邮箱的行数 / 地址总数 / 样例）。
+
+    email_count 数的是「行」而不是地址：它只用来比较两列的邮箱多少（提示选错列），
+    而行数与「会发出多少封邮件」同量级。address_count 才是地址总数。
+    """
+    rows_with_email = 0
+    address_count = 0
     sample = ""
     for row in data_rows:
         if index >= len(row):
             continue
-        value = _clean(row[index])
-        if _looks_like_email(value):
-            count += 1
+        found = _cell_addresses(row[index])
+        if found:
+            rows_with_email += 1
+            address_count += len(found)
             if not sample:
-                sample = value
+                sample = found[0]
     return {
         "index": index,
         "letter": get_column_letter(index + 1),
         "header": header[index],
-        "email_count": count,
+        "email_count": rows_with_email,
+        "address_count": address_count,
         "sample": sample,
     }
 
@@ -203,6 +212,7 @@ def parse_workbook(data: bytes, filename: str = "", email_column: int | None = N
         if not sid:
             continue
         email = _clean(row[email_column]) if email_column is not None and email_column < len(row) else ""
+        row_emails = recipients.split(email)
 
         if sid not in grouped:
             grouped[sid] = {
@@ -211,18 +221,25 @@ def parse_workbook(data: bytes, filename: str = "", email_column: int | None = N
                 "grade": _clean(get(row, "grade")),
                 "class": _clean(get(row, "class")),
                 "school": _clean(get(row, "school")),
-                "parent_email": email,
+                "emails": [],  # 跨行合并，循环结束后统一 join 成 parent_email
                 "items": [],
             }
             order.append(sid)
-        else:
-            stu = grouped[sid]
-            if email and stu["parent_email"] and email.lower() != stu["parent_email"].lower():
-                warnings.append(f"学生 {sid} 出现多个不同家长邮箱：{stu['parent_email']} / {email}")
-            if email and not stu["parent_email"]:
-                stu["parent_email"] = email
 
-        grouped[sid]["items"].append(
+        stu = grouped[sid]
+        known = {e.lower() for e in stu["emails"]}
+        fresh = [a for a in row_emails if a.lower() not in known]
+        if fresh:
+            if stu["emails"]:
+                # 同一学生的多行填了不同的邮箱。以前只保留第一个，现在合并发送——
+                # 但分歧本身是导出数据的毛病，要说出来，别让它悄悄变成「多发了一个人」。
+                warnings.append(
+                    f"学生 {sid} 的多行家长邮箱不一致：已收集 {recipients.join(stu['emails'])}，"
+                    f"本行另有 {', '.join(fresh)}（将合并发送）"
+                )
+            stu["emails"].extend(fresh)
+
+        stu["items"].append(
             {
                 "course": _clean(get(row, "course")),
                 "teacher": _clean(get(row, "teacher")),
@@ -232,7 +249,15 @@ def parse_workbook(data: bytes, filename: str = "", email_column: int | None = N
             }
         )
 
-    students = [grouped[sid] for sid in order]
+    students = []
+    for sid in order:
+        stu = grouped[sid]
+        emails = stu.pop("emails")
+        # 非法片段照样并进 parent_email：不静默丢弃、界面照原样显示，由 main.send() 拦下整批
+        stu["parent_email"] = recipients.join(emails)
+        stu["invalid_addresses"] = [a for a in emails if not recipients.is_address(a)]
+        students.append(stu)
+
     if students and name_col is None and first_col is None and last_col is None:
         warnings.append("未找到学生姓名列（Student Name 或 Student First/Last Name），邮件中不显示学生姓名")
     if email_column_info is not None:
@@ -247,6 +272,16 @@ def parse_workbook(data: bytes, filename: str = "", email_column: int | None = N
                 f"当前收件列 {email_column_info['letter']} 列只有 {email_column_info['email_count']} 条邮箱，"
                 f"而 {better['letter']} 列有 {better['email_count']} 条，请确认收件列是否选对"
             )
+    bad_email = [(s["student_id"], s["invalid_addresses"]) for s in students if s["invalid_addresses"]]
+    if bad_email:
+        # 只是提前告知：真正的拦截在 main.send()。上传就报错会把「先看看这份文件对不对」也堵死。
+        listed = "；".join(f"{sid}（{'、'.join(addrs)}）" for sid, addrs in bad_email[:5])
+        if len(bad_email) > 5:
+            listed += f"；等共 {len(bad_email)} 名"
+        warnings.append(
+            f"以下 {len(bad_email)} 名学生的家长邮箱含无法识别的地址，发送会被暂停，"
+            f"请先修正 Excel 后重新上传：{listed}"
+        )
     no_email = [s["student_id"] for s in students if not s["parent_email"]]
     if no_email:
         warnings.append(f"以下 {len(no_email)} 名学生缺少家长邮箱，将不会被发送：{', '.join(no_email)}")

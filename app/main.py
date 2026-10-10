@@ -15,6 +15,7 @@ from . import (
     email_template,
     excel_parser,
     graph_mailer,
+    recipients,
     send_job,
     send_log,
     smtp_mailer,
@@ -159,6 +160,8 @@ def _summary() -> dict:
         "with_email": sum(1 for s in students if s["parent_email"]),
         "no_email": no_email,
         "total_items": sum(len(s["items"]) for s in students),
+        # 一个学生可能有多个家长邮箱：发出去的邮件数按学生算，收件地址数按地址算
+        "total_recipients": sum(len(recipients.split(s["parent_email"])) for s in students),
         "warnings": _store.get("warnings", []),
         "email_columns": _store.get("email_columns", []),
         "email_column": _store.get("email_column"),
@@ -175,6 +178,8 @@ def get_students():
             "grade": s["grade"],
             "class": s["class"],
             "parent_email": s["parent_email"],
+            "recipient_count": len(recipients.split(s["parent_email"])),
+            "invalid_addresses": s.get("invalid_addresses", []),
             "item_count": len(s["items"]),
         }
         for s in _store["students"]
@@ -210,11 +215,35 @@ class SendRequest(BaseModel):
     test_email: Optional[str] = None
 
 
+def _invalid_recipient_detail(students: list[dict]) -> Optional[str]:
+    """收件地址里有无法识别的片段时，返回给用户看的原因；全部合法返回 None。
+
+    拦整批而不是「挑合法的几个发」：某位家长从来没收到、或一个学生只发到一半，都是事后
+    从日志里看不出来的事故。停下来、指出是哪几个学生的哪个片段，让用户回去改 Excel。
+    """
+    bad = [
+        (s["student_id"], s.get("student_name", ""), s["invalid_addresses"])
+        for s in students
+        if s.get("invalid_addresses")
+    ]
+    if not bad:
+        return None
+    shown = "；".join(
+        f"{sid}{f' {name}' if name else ''}（{'、'.join(addrs)}）" for sid, name, addrs in bad[:5]
+    )
+    if len(bad) > 5:
+        shown += f"；等共 {len(bad)} 名"
+    return (
+        f"以下 {len(bad)} 名学生的家长邮箱含无法识别的地址，已暂停本次发送，"
+        f"请修正 Excel 后重新上传：{shown}"
+    )
+
+
 @app.post("/api/send", status_code=202)
 def send(req: SendRequest):
     """校验 + 渲染 + 抢任务锁，立刻返回；实际发信在后台线程里跑。
 
-    这里只做同步的准备工作（模板异常要当场暴露），不在这里发信——整批发完再返回
+    这里只做同步的准备工作（模板异常、地址不合法都要当场暴露），不在这里发信——整批发完再返回
     会顶穿反向代理的读超时。运行期间内存中的 targets 已快照，重新上传 Excel 不影响
     进行中的任务。
     """
@@ -224,12 +253,20 @@ def send(req: SendRequest):
         students = [s for s in students if s["student_id"] in idset]
 
     if req.mode == "test":
-        if not req.test_email:
+        test_email = (req.test_email or "").strip()
+        if not test_email:
             raise HTTPException(status_code=400, detail="测试模式需填写测试邮箱")
+        bad = recipients.invalid(test_email)
+        if bad:
+            raise HTTPException(status_code=400, detail=f"测试邮箱地址无效：{'、'.join(bad)}")
         if not req.student_ids:
             students = students[:1]  # 未选择时仅发送一封样例
-        targets = [(req.test_email.strip(), s) for s in students]
+        targets = [(test_email, s) for s in students]
     else:
+        # 只校验本次真的要发的学生：取消勾选问题学生后，剩下的照常发送
+        detail = _invalid_recipient_detail(students)
+        if detail:
+            raise HTTPException(status_code=400, detail=detail)
         targets = [(s["parent_email"], s) for s in students]
 
     if not targets:

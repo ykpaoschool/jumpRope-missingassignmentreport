@@ -9,7 +9,7 @@ from typing import Optional
 import httpx
 import msal
 
-from . import config
+from . import config, recipients
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 SCOPES = ["https://graph.microsoft.com/.default"]
@@ -98,12 +98,19 @@ class _GraphSession:
         self._client.close()
 
     def send(self, recipient: str, subject: str, html_body: str) -> None:
-        """发送一封邮件；成功返回 None，失败抛 MailerError。"""
+        """发送一封邮件；成功返回 None，失败抛 MailerError。
+
+        recipient 可以是逗号/分号分隔的多个地址（同一学生的多位家长），此时一封邮件的
+        To 里放下全部地址——收件人列表由 Graph 逐个展开，不会被当成一个畸形地址。
+        """
+        addrs = recipients.split(recipient)
+        if not addrs:
+            raise MailerError("收件人地址为空")
         payload = {
             "message": {
                 "subject": subject,
                 "body": {"contentType": "html", "content": html_body},
-                "toRecipients": [{"emailAddress": {"address": recipient}}],
+                "toRecipients": [{"emailAddress": {"address": a}} for a in addrs],
             },
             "saveToSentItems": True,
         }

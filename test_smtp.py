@@ -8,7 +8,7 @@ from email.parser import BytesParser
 
 from app import config, smtp_mailer
 
-received = {"raw": b"", "mail_from": "", "rcpt_to": ""}
+received = {"raw": b"", "mail_from": "", "rcpt_to": []}
 
 
 def run_server(port=1025):
@@ -37,7 +37,7 @@ def run_server(port=1025):
                 received["mail_from"] = line.decode(errors="replace").strip()
                 f.write(b"250 OK\r\n")
             elif u.startswith(b"RCPT TO"):
-                received["rcpt_to"] = line.decode(errors="replace").strip()
+                received["rcpt_to"].append(line.decode(errors="replace").strip())
                 f.write(b"250 OK\r\n")
             elif u.startswith(b"DATA"):
                 f.write(b"354 go ahead\r\n")
@@ -65,12 +65,18 @@ config.SMTP_PASSWORD = ""
 config.SMTP_STARTTLS = False
 config.SENDER_DISPLAY_NAME = "教务部门 Academic Office"
 
+
+def rcpt_addresses() -> list[str]:
+    """服务端收到的收件地址（RCPT TO 行解析出来的裸地址）。"""
+    return [r.split(":", 1)[1].strip().strip("<>") for r in received["rcpt_to"]]
+
+
 srv, t = run_server(1025)
 
 smtp_mailer.send_email("parent@example.com", "测试主题 Test Subject", "<html><body>你好 Hello</body></html>")
 srv.close()
 
-assert "parent@example.com" in received["rcpt_to"], received
+assert rcpt_addresses() == ["parent@example.com"], received
 assert "no-reply@school.edu" in received["mail_from"], received
 
 msg = BytesParser(policy=policy.default).parsebytes(received["raw"])
@@ -81,6 +87,24 @@ assert "你好 Hello" in body, body
 assert str(msg["To"]) == "parent@example.com"
 
 print("OK: smtp_mailer.send_email delivered message end-to-end (subject/body decoded)")
+
+
+# ---- 一格多个家长邮箱：一封邮件发给全部地址 ----
+# 逗号与分号都要拆开：smtplib 不会自己拆，整串丢进 RCPT TO 会被服务器拒收（这正是改动前的行为）。
+received["raw"] = b""
+received["rcpt_to"].clear()
+srv_multi, _ = run_server(1025)
+smtp_mailer.send_email(
+    "father@example.com; mother@example.com, FATHER@example.com", "多地址", "<p>hi</p>"
+)
+srv_multi.close()
+
+assert rcpt_addresses() == ["father@example.com", "mother@example.com"], received["rcpt_to"]
+msg = BytesParser(policy=policy.default).parsebytes(received["raw"])
+assert str(msg["To"]) == "father@example.com, mother@example.com", msg["To"]
+assert "多地址" in str(msg["Subject"]), msg["Subject"]
+
+print("OK: 一格多个邮箱 → 一封邮件里全部作为收件人（去重 / To 头规范化）")
 
 
 # ---- 建连失败的重试（见 smtp_mailer.CONNECT_RETRY_DELAYS）----
@@ -116,13 +140,13 @@ def _flaky_open():
 
 smtp_mailer._open = _flaky_open
 received["raw"] = b""
-received["rcpt_to"] = ""
+received["rcpt_to"].clear()
 smtp_mailer.send_email("parent@example.com", "重试测试 Retry", "<p>hi</p>")
 srv_retry.close()
 smtp_mailer._open = _real_open
 
 assert _flaky["opens"] == 2, _flaky
-assert "parent@example.com" in received["rcpt_to"], received
+assert rcpt_addresses() == ["parent@example.com"], received
 assert received["raw"], "重试之后应当真的投出去一封"
 
 # 2) 一直连不上：只试 3 次（首次 + 2 次重试）就放弃，原始原因照原样抛出
