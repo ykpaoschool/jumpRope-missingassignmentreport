@@ -1,5 +1,6 @@
 """用最小 SMTP 服务器验证 smtp_mailer 端到端发送。"""
 
+import smtplib
 import socket
 import threading
 from email import policy
@@ -80,3 +81,93 @@ assert "你好 Hello" in body, body
 assert str(msg["To"]) == "parent@example.com"
 
 print("OK: smtp_mailer.send_email delivered message end-to-end (subject/body decoded)")
+
+
+# ---- 建连失败的重试（见 smtp_mailer.CONNECT_RETRY_DELAYS）----
+# 生产上真实发生过的形态：新建容器里第一次解析 SMTP 域名就 `Name or service not known`，
+# 整批因此一封都没发出去，隔一分钟再点一次「发送」才成功。
+
+_real_open = smtp_mailer._open
+_real_delays = smtp_mailer.CONNECT_RETRY_DELAYS
+_saved_smtp_user = config.SMTP_USER
+_retry_error = "连接 SMTP 服务器失败：[Errno -2] Name or service not known"
+smtp_mailer.CONNECT_RETRY_DELAYS = (0, 0)  # 测试里不真等
+
+
+def _expect_mailer_error(action, why):
+    try:
+        action()
+    except smtp_mailer.MailerError as e:
+        return str(e)
+    raise AssertionError(why)
+
+
+# 1) 第一次解析失败、第二次成功：整批照常发出去（这正是要防的场景）
+_flaky = {"opens": 0}
+srv_retry, _ = run_server(1025)
+
+
+def _flaky_open():
+    _flaky["opens"] += 1
+    if _flaky["opens"] == 1:
+        raise smtp_mailer.MailerError(_retry_error)
+    return _real_open()
+
+
+smtp_mailer._open = _flaky_open
+received["raw"] = b""
+received["rcpt_to"] = ""
+smtp_mailer.send_email("parent@example.com", "重试测试 Retry", "<p>hi</p>")
+srv_retry.close()
+smtp_mailer._open = _real_open
+
+assert _flaky["opens"] == 2, _flaky
+assert "parent@example.com" in received["rcpt_to"], received
+assert received["raw"], "重试之后应当真的投出去一封"
+
+# 2) 一直连不上：只试 3 次（首次 + 2 次重试）就放弃，原始原因照原样抛出
+_always = {"opens": 0}
+
+
+def _always_fail():
+    _always["opens"] += 1
+    raise smtp_mailer.MailerError(_retry_error)
+
+
+smtp_mailer._open = _always_fail
+err = _expect_mailer_error(
+    lambda: smtp_mailer.send_email("parent@example.com", "x", "<p>x</p>"),
+    "建连始终失败时应当抛 MailerError",
+)
+assert _always["opens"] == len(_real_delays) + 1, _always
+assert _retry_error in err, err
+
+
+# 3) 登录失败不重试：凭据错是持续性的，重试只是让人多等 7 秒才看到原因
+class _LoginFailServer:
+    def __init__(self):
+        self.logins = 0
+
+    def login(self, user, password):
+        self.logins += 1
+        raise smtplib.SMTPAuthenticationError(535, b"bad credentials")
+
+    def quit(self):
+        pass
+
+
+_login_fail = _LoginFailServer()
+smtp_mailer._open = lambda: _login_fail
+config.SMTP_USER = "someone@school.edu"
+err = _expect_mailer_error(
+    lambda: smtp_mailer.send_email("parent@example.com", "x", "<p>x</p>"),
+    "登录失败时应当抛 MailerError",
+)
+assert _login_fail.logins == 1, _login_fail
+assert "SMTP 登录失败" in err, err
+
+smtp_mailer._open = _real_open
+smtp_mailer.CONNECT_RETRY_DELAYS = _real_delays
+config.SMTP_USER = _saved_smtp_user
+
+print("OK: SMTP 建连瞬时失败会退避重试；一直失败或登录失败则不重试")

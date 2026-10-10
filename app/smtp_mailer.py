@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import smtplib
+import sys
+import time
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr
 from typing import Optional
 
 from . import config
+
+# 建连失败后依次等待这些秒数再重试，长度即重试次数（先 2 秒、再 5 秒）。
+# 为什么需要：容器刚创建时内置 DNS 可能是冷的，直接回 `[Errno -2] Name or service not known`，
+# 而整批只在循环外开一次连接，一次瞬时解析失败就等于整批一封都不发 —— 那会逼用户手动再点一次
+# 「发送」，正是这个项目一直在防的重复发信动作。
+# 登录失败不重试：凭据错是持续性的，重试只是让人多等 7 秒才看到原因。
+CONNECT_RETRY_DELAYS = (2.0, 5.0)
 
 
 class MailerError(Exception):
@@ -31,17 +40,39 @@ def _build_message(recipient: str, subject: str, html_body: str) -> MIMEMultipar
     return msg
 
 
-def _connect() -> smtplib.SMTP:
-    _check_config()
+def _open() -> smtplib.SMTP:
+    """建 TCP/TLS 连接（不含登录），失败抛 MailerError。"""
     try:
         if config.SMTP_PORT == 465:
-            server = smtplib.SMTP_SSL(config.SMTP_HOST, config.SMTP_PORT, timeout=30)
-        else:
-            server = smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT, timeout=30)
-            if config.SMTP_STARTTLS:
-                server.starttls()
+            return smtplib.SMTP_SSL(config.SMTP_HOST, config.SMTP_PORT, timeout=30)
+        server = smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT, timeout=30)
+        if config.SMTP_STARTTLS:
+            server.starttls()
+        return server
     except Exception as e:  # noqa: BLE001
         raise MailerError(f"连接 SMTP 服务器失败：{e}")
+
+
+def _open_with_retry() -> smtplib.SMTP:
+    """建 TCP/TLS 连接，瞬时失败退避重试；最后一次失败照原样抛出。
+
+    重试过程打到 stderr：日志里要看得见「刚才重试过」，不能是魔法（用 docker compose logs 查）。
+    """
+    delays = list(CONNECT_RETRY_DELAYS)  # 每次现读，测试改模块常量即可生效
+    while True:
+        try:
+            return _open()
+        except MailerError as e:
+            if not delays:
+                raise
+            delay = delays.pop(0)
+            print(f"[SMTP] 建连失败，{delay:.0f} 秒后重试：{e}", file=sys.stderr)
+            time.sleep(delay)
+
+
+def _connect() -> smtplib.SMTP:
+    _check_config()
+    server = _open_with_retry()
     if config.SMTP_USER:
         try:
             server.login(config.SMTP_USER, config.SMTP_PASSWORD)
