@@ -221,12 +221,29 @@ uvicorn app.main:app --reload
   日志里的学生 ID 与收件人可用来核对「上次失败的这些人」。
 - 数据库不可用时（例如容器内目录权限不对），第 4 节会显示红色提示与库文件路径；
   此时**发信照常进行**，只是这些记录不会留存。
-- 日志**不自动清理**，长期使用会持续增长。需要时可自行备份或删除该文件：
+- 日志**不自动清理**，长期使用会持续增长；需要时用下面的管理员脚本裁剪，或直接备份 / 删除该文件。
 
-  ```bash
-  sqlite3 data/mailer.db "select ts, event, student_id, class_name, recipient, ok, error from send_log order by id desc limit 20"
-  cp data/mailer.db ~/mailer-backup-$(date +%F).db
-  ```
+### 清理发送日志
+
+`scripts/clear_send_log.py` 是随镜像一起发布的管理员脚本，在服务器上的容器内执行：
+
+```bash
+docker compose exec mailer python3 scripts/clear_send_log.py --all --dry-run        # 先看会删多少，不动数据
+docker compose exec mailer python3 scripts/clear_send_log.py --all                  # 清空，需输入 yes 确认
+docker compose exec mailer python3 scripts/clear_send_log.py --before 2026-01-01    # 只删该日期之前（不含当天）的
+docker compose exec mailer python3 scripts/clear_send_log.py --day 2026-10-01       # 只删某一天
+```
+
+- 删除范围**必须显式指定**（`--all` / `--day` / `--before`），不带范围时只列出当前记录数与用法，一条都不删。
+- 除 `--yes` 外，执行前会列出将删除的条数、日期跨度与各事件条数，并要求输入 `yes`（`y` 不算）确认。
+- 删完会回收库文件空间（`--no-vacuum` 可关）。发信进行中不要执行，建议在两次发送之间清理。
+
+宿主上装有 `sqlite3` 时也可以直接查库、备份或删除库文件：
+
+```bash
+sqlite3 data/mailer.db "select ts, event, student_id, class_name, recipient, ok, error from send_log order by id desc limit 20"
+cp data/mailer.db ~/mailer-backup-$(date +%F).db
+```
 
 ## 注意事项
 

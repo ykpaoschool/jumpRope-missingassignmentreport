@@ -14,6 +14,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code (no .env — credentials are passed at runtime)
 COPY app/ ./app/
 COPY static/ ./static/
+# 管理员脚本：服务器上只有 compose.yaml 与 .env，脚本不随镜像下去就没法在服务器上执行
+# （docker compose exec mailer python3 scripts/clear_send_log.py ...）
+COPY scripts/ ./scripts/
 
 # Run as an unprivileged user
 RUN useradd --create-home --uid 1000 appuser
