@@ -94,11 +94,13 @@ def render_email(
       {TITLE}
     </div>
     <div style="padding:24px;">
-      <p style="{_P}">尊敬的家长 / Dear Parent，</p>
+      <p style="{_P}">亲爱的家长与同学 / Dear Parent and Student,</p>
       <p style="{_P}">
-        您好！以下是您孩子近期缺交作业记录，烦请查阅并督促孩子及时补交。<br/>
-        Please find below the record of missing assignments for your child. Kindly review and
-        support your child to submit the work in a timely manner.
+        您好！以下是学生近期缺交作业记录，请同学及时补交作业，也请家长协助督促，共同帮助同学养成按时完成作业的良好学习习惯。感谢配合！<br/>
+        Please see below the record of the student’s missing assignments. We encourage the student to
+        complete and submit the outstanding work as soon as possible. Parents are also kindly asked to
+        support and encourage their child in developing the habit of completing assignments on time.
+        Many thanks!
       </p>
 
       <div style="margin:0 0 20px; font-size:14px; color:#333; line-height:1.8;">
