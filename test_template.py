@@ -34,11 +34,18 @@ assert "Grade Level：8" in html
 assert "班级 Class" not in html, "新模板的学生信息不再包含班级"
 assert "作业异常列表 / Missing Assignment List" in html
 assert "Section Course Name" in html
-assert "M: 缺交作业 Missing Work" in html
-assert "X: 未完成作业 Incomplete Work" in html
+assert "X: Missing (did not submit but should have) 未提交（应当提交但未上交）" in html
+assert "M: Missing Work" not in html, "M 行不再发提醒邮件，图例里不再解释 M"
+assert "Incomplete Work" not in html
 assert f'href="{URL}"' in html
 assert "查看未按时提交作业处理程序" in html
-assert "contact the relevant subject teacher(s)" in html
+assert "请注意：尽管形成性评价的结果不会直接计入学生的学业表现等级" in html
+assert "如您有任何疑问，请联系相关学科教师。" in html
+assert "可联系相关学科教师" not in html
+# 段落里的英文跨行书写，断言前先把空白压平
+flat = " ".join(html.split())
+assert "formative evidence doesn" in flat and "summative assessments." in flat
+assert "contact the relevant subject teacher(s)" in flat
 assert SIG in html and MAIL in html
 
 # 场景 2：姓名为空 → 整行不显示，不留空标签

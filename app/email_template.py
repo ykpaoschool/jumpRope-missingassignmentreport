@@ -10,10 +10,9 @@ _P = "margin:0 0 14px; font-size:14px; color:#333; line-height:1.7;"
 
 TITLE = "缺交作业通知 Missing Assignments Notification"
 
-# 缺交代码释义（模板固定内容）
+# 缺交代码释义（模板固定内容）。M 行不再发提醒邮件，所以只解释 X
 CODE_LEGEND = (
-    ("M", "缺交作业 Missing Work"),
-    ("X", "未完成作业 Incomplete Work"),
+    ("X", "Missing (did not submit but should have) 未提交（应当提交但未上交）"),
 )
 
 # 落款与「处理程序」链接的缺省值，正式运行由 config.py 注入
@@ -135,7 +134,12 @@ def render_email(
       <p style="{_P}">{_procedure_html(procedure_url)}</p>
 
       <p style="{_P}">
-        如您有任何疑问，可联系相关学科教师。<br/>
+        请注意：尽管形成性评价的结果不会直接计入学生的学业表现等级，但它持续追踪学习情况，并借助清晰、有指导性的教师反馈帮学生找到提升方向。我们要求学生认真完成所有形成性评价任务，这类练习也将为总结性评价取得良好表现打下基础。<br/>
+        如您有任何疑问，请联系相关学科教师。<br/>
+        Please note that although formative evidence doesn’t contribute directly to the students’
+        achievement level, it tracks ongoing learning and identifies areas for growth through clear,
+        actionable feedback from teachers. We require students to complete all formative tasks, as this
+        practice builds the foundation needed to succeed in summative assessments.<br/>
         Should you have any questions, please do not hesitate to contact the relevant subject teacher(s).
       </p>
 
